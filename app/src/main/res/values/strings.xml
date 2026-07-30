@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Auto Register Shift</string>
+    <string name="accessibility_service_label">Auto Register Shift – Trợ năng</string>
+    <string name="accessibility_service_description">Đọc giao diện và thực hiện thao tác đăng ký ca theo cấu hình của người dùng. Không gửi dữ liệu ra ngoài thiết bị.</string>
+</resources>
