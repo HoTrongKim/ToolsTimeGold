@@ -92,6 +92,28 @@ class ScreenAnalyzerTest {
     }
 
     @Test
+    fun visibleSlotIsUsedBeforeAnotherRefresh() {
+        assertEquals(
+            PreRefreshDecision.USE_VISIBLE_SLOT,
+            PreRefreshDecisionPolicy.choose(
+                loading = false,
+                detectedSlot = true,
+                visibleTimeRange = true,
+                fallbackEnabled = true
+            )
+        )
+        assertEquals(
+            PreRefreshDecision.WAIT_FOR_CURRENT_LOADING,
+            PreRefreshDecisionPolicy.choose(
+                loading = true,
+                detectedSlot = true,
+                visibleTimeRange = true,
+                fallbackEnabled = true
+            )
+        )
+    }
+
+    @Test
     fun registerButton() {
         assertTrue(analyze(node("Chi tiết", children = listOf(node("Đăng ký giờ làm", true)))).hasRegisterButton)
     }
@@ -109,6 +131,18 @@ class ScreenAnalyzerTest {
     @Test
     fun networkError() {
         assertTrue(analyze(node("Không thể kết nối. Vui lòng thử lại")).networkError)
+    }
+
+    @Test
+    fun targetAppRefreshRateLimitIsDetected() {
+        assertTrue(
+            analyze(
+                node(
+                    "Bạn đang kiểm tra cuốc xe quá thường xuyên. " +
+                        "Vui lòng thao tác chậm hơn và thử lại sau ít phút."
+                )
+            ).refreshRateLimited
+        )
     }
 
     @Test

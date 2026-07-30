@@ -26,19 +26,22 @@ class NodeFinder {
         listOfNotNull(node.text?.toString(), node.contentDescription?.toString())
             .joinToString(" ").trim()
 
+    fun visibleNodes(root: AccessibilityNodeInfo?): List<AccessibilityNodeInfo> =
+        allNodes(root).filter(::isVisible)
+
     fun subtreeText(node: AccessibilityNodeInfo, maxNodes: Int = 40): String =
-        allNodes(node).take(maxNodes).joinToString(" ") { nodeText(it) }.trim()
+        visibleNodes(node).take(maxNodes).joinToString(" ") { nodeText(it) }.trim()
 
     fun containsAny(root: AccessibilityNodeInfo?, candidates: List<String>): Boolean {
         if (candidates.none(String::isNotBlank)) return false
-        return allNodes(root).any { node ->
+        return visibleNodes(root).any { node ->
             val text = nodeText(node)
             candidates.any { it.isNotBlank() && text.contains(it, ignoreCase = true) }
         }
     }
 
     fun findByTexts(root: AccessibilityNodeInfo?, candidates: List<String>): AccessibilityNodeInfo? =
-        allNodes(root).firstOrNull { node ->
+        visibleNodes(root).firstOrNull { node ->
             val text = nodeText(node)
             candidates.any { it.isNotBlank() && text.contains(it, ignoreCase = true) }
         }
@@ -53,16 +56,16 @@ class NodeFinder {
     }
 
     fun hasLoading(root: AccessibilityNodeInfo?, loadingTexts: List<String>): Boolean =
-        allNodes(root).any {
+        visibleNodes(root).any {
             it.className?.toString()?.contains("ProgressBar", ignoreCase = true) == true ||
                 loadingTexts.any { marker -> nodeText(it).contains(marker, ignoreCase = true) }
         }
 
     fun hasTimeRange(root: AccessibilityNodeInfo?): Boolean =
-        allNodes(root).any { TimeRegex.findAll(nodeText(it)).distinct().size >= 2 }
+        visibleNodes(root).any { TimeRegex.findAll(nodeText(it)).distinct().size >= 2 }
 
     fun detectShifts(root: AccessibilityNodeInfo?, screenHeight: Int): List<DetectedShift> {
-        val nodes = allNodes(root)
+        val nodes = visibleNodes(root)
         val candidates = nodes.mapNotNull { node ->
             val clickable = clickable(node)
             val target = clickable ?: node
@@ -82,6 +85,12 @@ class NodeFinder {
             DetectedShift(info, target, bounds)
         }
         return candidates.distinctBy { it.shift.identifier }
+    }
+
+    private fun isVisible(node: AccessibilityNodeInfo): Boolean {
+        if (!runCatching { node.isVisibleToUser }.getOrDefault(false)) return false
+        val bounds = Rect().also(node::getBoundsInScreen)
+        return !bounds.isEmpty && bounds.width() > 1 && bounds.height() > 1
     }
 }
 

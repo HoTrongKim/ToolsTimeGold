@@ -7,6 +7,7 @@ import com.autoregistershift.data.LogRepository
 import com.autoregistershift.data.SettingsRepository
 import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.LogLevel
+import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.service.AutomationForegroundService
 import com.autoregistershift.service.FloatingOverlayService
 import java.util.concurrent.atomic.AtomicBoolean
@@ -96,6 +97,15 @@ object AutomationController {
 
     fun pause() {
         engine?.pause()
+    }
+
+    fun setRefreshSpeed(preset: RefreshSpeedPreset) {
+        engine?.updateRefreshSpeed(preset)
+        val app = appContext ?: return
+        scope.launch {
+            SettingsRepository(app).update { preset.applyTo(it) }
+            LogRepository(app).add("Đã đổi tốc độ: ${preset.label}")
+        }
     }
 
     fun stop() {

@@ -15,7 +15,7 @@ data class CoordinatePoint(
             CoordinatePoint("load_end", "Kết thúc vuốt tải thêm", .50f, .35f),
             CoordinatePoint("first_slot", "Ca đầu tiên", .50f, .45f),
             CoordinatePoint("slot_fallback", "Bên phải thẻ ca", .88f, .45f),
-            CoordinatePoint("register", "Nút đăng ký", .50f, .82f),
+            CoordinatePoint("register", "Nút đăng ký", .50f, .91f),
             CoordinatePoint("close_dialog", "Đóng thông báo", .50f, .70f),
             CoordinatePoint("back_fallback", "Quay lại dự phòng", .08f, .07f)
         )

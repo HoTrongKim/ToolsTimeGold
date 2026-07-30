@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -40,6 +41,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.autoregistershift.automation.AutomationController
 import com.autoregistershift.automation.AutomationState
 import com.autoregistershift.data.SettingsRepository
+import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.ui.components.SectionCard
 import com.autoregistershift.ui.components.ToggleRow
 import com.autoregistershift.util.PackageUtils
@@ -202,6 +204,32 @@ fun MainScreen(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Khôi phục mặc định") }
+            }
+
+            SectionCard("Tốc độ làm mới") {
+                Text(
+                    "Đổi tốc độ có hiệu lực ngay. Tool làm mới liên tục theo tốc độ đã chọn và không tự tạm nghỉ.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    RefreshSpeedPreset.entries.forEach { preset ->
+                        FilterChip(
+                            selected = preset.matches(settings),
+                            onClick = {
+                                AutomationController.setRefreshSpeed(preset)
+                            },
+                            label = { Text(preset.buttonLabel) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Text(
+                    "Hiện tại: ${settings.refreshIntervalMs} ms • Chờ tải: ${settings.waitAfterSwipeMs} ms",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
 
             SectionCard("Tùy chọn nhanh") {

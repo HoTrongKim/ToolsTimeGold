@@ -17,6 +17,7 @@ data class ScreenAnalysis(
     val success: Boolean,
     val full: Boolean,
     val networkError: Boolean,
+    val refreshRateLimited: Boolean,
     val loading: Boolean
 )
 
@@ -35,6 +36,8 @@ class ScreenAnalyzer {
             success = settings.successTexts.any { allText.contains(it, ignoreCase = true) },
             full = settings.fullTexts.any { allText.contains(it, ignoreCase = true) },
             networkError = settings.networkErrorTexts.any { allText.contains(it, ignoreCase = true) },
+            refreshRateLimited =
+                settings.refreshRateLimitTexts.any { allText.contains(it, ignoreCase = true) },
             loading = nodes.any { it.loading } ||
                 settings.loadingTexts.any { allText.contains(it, ignoreCase = true) }
         )

@@ -97,6 +97,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                 ListEditor("Lỗi mạng", draft.networkErrorTexts) {
                     draft = draft.copy(networkErrorTexts = it)
                 }
+                ListEditor("Ứng dụng yêu cầu giảm tốc", draft.refreshRateLimitTexts) {
+                    draft = draft.copy(refreshRateLimitTexts = it)
+                }
                 ListEditor("Đang tải", draft.loadingTexts) {
                     draft = draft.copy(loadingTexts = it)
                 }
@@ -125,7 +128,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     draft = draft.copy(shiftCooldownMs = it)
                 }
                 LongEditor("Thời gian vuốt làm mới", draft.refreshSwipeDurationMs) {
-                    draft = draft.copy(refreshSwipeDurationMs = it.coerceIn(400, 700))
+                    draft = draft.copy(refreshSwipeDurationMs = it.coerceIn(250, 700))
                 }
                 LongEditor("Thời gian vuốt tải thêm", draft.loadSwipeDurationMs) {
                     draft = draft.copy(loadSwipeDurationMs = it.coerceIn(350, 600))
@@ -268,7 +271,7 @@ private fun AppSettings.sanitized() = copy(
     waitAfterOpenSlotMs = waitAfterOpenSlotMs.coerceAtLeast(200),
     registrationTimeoutMs = registrationTimeoutMs.coerceAtLeast(1_000),
     maxRetry = maxRetry.coerceIn(0, 10),
-    clickDebounceMs = clickDebounceMs.coerceAtLeast(250),
+    clickDebounceMs = clickDebounceMs.coerceAtLeast(100),
     shiftCooldownMs = shiftCooldownMs.coerceAtLeast(1_000),
     maxRegistrations = maxRegistrations.coerceAtLeast(1),
     maxRunMinutes = maxRunMinutes.coerceAtLeast(1),

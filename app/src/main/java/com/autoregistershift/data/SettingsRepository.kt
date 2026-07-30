@@ -27,6 +27,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun reset() = update { AppSettings() }
 
     private fun MutablePreferences.write(value: AppSettings) {
+        this[Keys.schemaVersion] = CURRENT_SCHEMA_VERSION
         this[Keys.targetPackage] = value.targetPackage
         this[Keys.scheduleTexts] = value.scheduleScreenTexts.encodeList()
         this[Keys.registerTexts] = value.registerButtonTexts.encodeList()
@@ -34,6 +35,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.successTexts] = value.successTexts.encodeList()
         this[Keys.fullTexts] = value.fullTexts.encodeList()
         this[Keys.errorTexts] = value.networkErrorTexts.encodeList()
+        this[Keys.rateLimitTexts] = value.refreshRateLimitTexts.encodeList()
         this[Keys.detailTexts] = value.detailScreenTexts.encodeList()
         this[Keys.loadingTexts] = value.loadingTexts.encodeList()
         this[Keys.prohibitedTexts] = value.prohibitedTexts.encodeList()
@@ -65,6 +67,19 @@ class SettingsRepository(private val context: Context) {
 
     private fun androidx.datastore.preferences.core.Preferences.toSettings(): AppSettings {
         val defaults = AppSettings()
+        val schemaVersion = this[Keys.schemaVersion] ?: 0
+        val storedRefresh = this[Keys.refreshInterval] ?: defaults.refreshIntervalMs
+        val storedWaitAfterSwipe = this[Keys.waitAfterSwipe] ?: defaults.waitAfterSwipeMs
+        val storedMaxRefreshes = this[Keys.maxRefreshes] ?: defaults.maxRefreshesPerMinute
+        val storedClickDebounce = this[Keys.clickDebounce] ?: defaults.clickDebounceMs
+        val storedRefreshDuration = this[Keys.refreshDuration] ?: defaults.refreshSwipeDurationMs
+        val wasPreviousFastPreset = schemaVersion == 4 &&
+            storedRefresh == 1_000L &&
+            storedWaitAfterSwipe == 600L
+        val wasExtremeFastPreset = schemaVersion == 5 &&
+            storedRefresh == 500L &&
+            storedWaitAfterSwipe == 300L
+        val shouldMigrateFastPreset = wasPreviousFastPreset || wasExtremeFastPreset
         return defaults.copy(
             targetPackage = this[Keys.targetPackage] ?: defaults.targetPackage,
             scheduleScreenTexts = this[Keys.scheduleTexts].decodeList(defaults.scheduleScreenTexts),
@@ -76,22 +91,52 @@ class SettingsRepository(private val context: Context) {
             successTexts = this[Keys.successTexts].decodeList(defaults.successTexts),
             fullTexts = this[Keys.fullTexts].decodeList(defaults.fullTexts),
             networkErrorTexts = this[Keys.errorTexts].decodeList(defaults.networkErrorTexts),
-            detailScreenTexts = this[Keys.detailTexts].decodeList(defaults.detailScreenTexts),
+            refreshRateLimitTexts =
+                this[Keys.rateLimitTexts].decodeList(defaults.refreshRateLimitTexts),
+            detailScreenTexts = (
+                this[Keys.detailTexts].decodeList(defaults.detailScreenTexts) +
+                    listOf("Thu nhập cố định", "Loại dịch vụ", "Cách thức hoạt động của Giờ vàng")
+                ).distinct(),
             loadingTexts = this[Keys.loadingTexts].decodeList(defaults.loadingTexts),
             prohibitedTexts = this[Keys.prohibitedTexts].decodeList(defaults.prohibitedTexts),
-            refreshIntervalMs = this[Keys.refreshInterval] ?: defaults.refreshIntervalMs,
-            waitAfterSwipeMs = this[Keys.waitAfterSwipe] ?: defaults.waitAfterSwipeMs,
+            refreshIntervalMs = when {
+                shouldMigrateFastPreset -> 1_000L
+                schemaVersion < 3 && storedRefresh == 3_000L -> 2_000L
+                else -> storedRefresh
+            },
+            waitAfterSwipeMs = when {
+                shouldMigrateFastPreset -> 300L
+                schemaVersion < 3 && storedWaitAfterSwipe == 1_500L -> 1_200L
+                else -> storedWaitAfterSwipe
+            },
             waitAfterOpenSlotMs = this[Keys.waitAfterOpen] ?: defaults.waitAfterOpenSlotMs,
             registrationTimeoutMs = this[Keys.resultTimeout] ?: defaults.registrationTimeoutMs,
             maxRetry = this[Keys.maxRetry] ?: defaults.maxRetry,
-            clickDebounceMs = this[Keys.clickDebounce] ?: defaults.clickDebounceMs,
+            clickDebounceMs = when {
+                wasPreviousFastPreset && storedClickDebounce == 150L -> 100L
+                wasExtremeFastPreset && storedClickDebounce == 100L -> 100L
+                schemaVersion < 4 && storedClickDebounce == 500L -> 200L
+                else -> storedClickDebounce
+            },
             shiftCooldownMs = this[Keys.cooldown] ?: defaults.shiftCooldownMs,
             maxRegistrations = this[Keys.maxRegistrations] ?: defaults.maxRegistrations,
             maxRunMinutes = this[Keys.maxRunMinutes] ?: defaults.maxRunMinutes,
             maxClicksPerMinute = this[Keys.maxClicks] ?: defaults.maxClicksPerMinute,
-            maxRefreshesPerMinute = this[Keys.maxRefreshes] ?: defaults.maxRefreshesPerMinute,
+            maxRefreshesPerMinute = when {
+                wasPreviousFastPreset && storedMaxRefreshes == 40 -> 35
+                wasExtremeFastPreset && storedMaxRefreshes == 60 -> 35
+                schemaVersion < 3 && storedMaxRefreshes == 20 -> 30
+                else -> storedMaxRefreshes
+            },
             maxUnknownScreens = this[Keys.maxUnknown] ?: defaults.maxUnknownScreens,
-            refreshSwipeDurationMs = this[Keys.refreshDuration] ?: defaults.refreshSwipeDurationMs,
+            refreshSwipeDurationMs = if (
+                (wasPreviousFastPreset && storedRefreshDuration == 550L) ||
+                    (wasExtremeFastPreset && storedRefreshDuration == 350L)
+            ) {
+                350L
+            } else {
+                storedRefreshDuration
+            },
             loadSwipeDurationMs = this[Keys.loadDuration] ?: defaults.loadSwipeDurationMs,
             registerAll = this[Keys.registerAll] ?: defaults.registerAll,
             stopAfterSuccess = this[Keys.stopAfterSuccess] ?: defaults.stopAfterSuccess,
@@ -114,18 +159,28 @@ class SettingsRepository(private val context: Context) {
         val parsed = raw.lineSequence().mapNotNull { line ->
             val parts = line.split('\t')
             if (parts.size != 5) return@mapNotNull null
-            CoordinatePoint(
+            val point = CoordinatePoint(
                 id = parts[0],
                 name = parts[1],
                 xRatio = parts[2].toFloatOrNull() ?: return@mapNotNull null,
                 yRatio = parts[3].toFloatOrNull() ?: return@mapNotNull null,
                 enabled = parts[4].toBooleanStrictOrNull() ?: true
             )
+            // Di chuyển điểm đăng ký mặc định cũ lên đúng tâm nút ở giao diện thực tế.
+            if (point.id == "register" &&
+                kotlin.math.abs(point.xRatio - .50f) < .001f &&
+                kotlin.math.abs(point.yRatio - .82f) < .001f
+            ) {
+                point.copy(yRatio = .91f)
+            } else {
+                point
+            }
         }.associateBy { it.id }
         return defaults.map { parsed[it.id] ?: it }
     }
 
     private object Keys {
+        val schemaVersion = intPreferencesKey("settings_schema_version")
         val targetPackage = stringPreferencesKey("target_package")
         val scheduleTexts = stringPreferencesKey("schedule_texts")
         val registerTexts = stringPreferencesKey("register_texts")
@@ -133,6 +188,7 @@ class SettingsRepository(private val context: Context) {
         val successTexts = stringPreferencesKey("success_texts")
         val fullTexts = stringPreferencesKey("full_texts")
         val errorTexts = stringPreferencesKey("error_texts")
+        val rateLimitTexts = stringPreferencesKey("rate_limit_texts")
         val detailTexts = stringPreferencesKey("detail_texts")
         val loadingTexts = stringPreferencesKey("loading_texts")
         val prohibitedTexts = stringPreferencesKey("prohibited_texts")
@@ -158,5 +214,9 @@ class SettingsRepository(private val context: Context) {
         val overlay = booleanPreferencesKey("overlay")
         val keepScreen = booleanPreferencesKey("keep_screen")
         val coordinates = stringPreferencesKey("coordinates")
+    }
+
+    companion object {
+        private const val CURRENT_SCHEMA_VERSION = 6
     }
 }

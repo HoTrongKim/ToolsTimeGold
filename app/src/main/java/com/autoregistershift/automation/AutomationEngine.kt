@@ -14,9 +14,11 @@ import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.AppSettings
 import com.autoregistershift.model.CoordinatePoint
 import com.autoregistershift.model.LogLevel
+import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.model.ShiftAttemptStatus
 import com.autoregistershift.model.ShiftInfo
 import com.autoregistershift.service.AutoRegisterAccessibilityService
+import com.autoregistershift.service.FloatingOverlayService
 import com.autoregistershift.util.CoordinateConverter
 import java.time.LocalDate
 import java.util.concurrent.atomic.AtomicBoolean
@@ -39,8 +41,13 @@ class AutomationEngine(
     private val stateMachine = StateMachine()
     private val finder = NodeFinder()
     private val resultDetector = RegistrationResultDetector(finder)
+    @Volatile private var refreshIntervalMs = settings.refreshIntervalMs
+    @Volatile private var waitAfterSwipeMs = settings.waitAfterSwipeMs
+    @Volatile private var maxRefreshesPerMinute = settings.maxRefreshesPerMinute
+    @Volatile private var clickDebounceMs = settings.clickDebounceMs
+    @Volatile private var refreshSwipeDurationMs = settings.refreshSwipeDurationMs
     private val clickLimiter = RateLimiter(limit = { settings.maxClicksPerMinute })
-    private val refreshLimiter = RateLimiter(limit = { settings.maxRefreshesPerMinute })
+    private val refreshLimiter = RateLimiter(limit = { maxRefreshesPerMinute })
     private var refreshCount = 0
     private var successCount = 0
     private var unknownScreenCount = 0
@@ -48,6 +55,14 @@ class AutomationEngine(
     private val startedAt = System.currentTimeMillis()
 
     val isPaused: Boolean get() = paused.get()
+
+    fun updateRefreshSpeed(preset: RefreshSpeedPreset) {
+        refreshIntervalMs = preset.refreshIntervalMs
+        waitAfterSwipeMs = preset.waitAfterSwipeMs
+        maxRefreshesPerMinute = preset.maxRefreshesPerMinute
+        clickDebounceMs = preset.clickDebounceMs
+        refreshSwipeDurationMs = preset.refreshSwipeDurationMs
+    }
 
     suspend fun run() {
         try {
@@ -97,44 +112,71 @@ class AutomationEngine(
                 }
                 unknownScreenCount = 0
                 logs.add("Đã nhận diện màn hình đăng ký")
-                if (!refresh(service)) {
-                    delay(settings.refreshIntervalMs)
-                    continue
+
+                val (_, height) = service.displaySize()
+                var slotRoot = root
+                var detected = finder.detectShifts(slotRoot, height)
+                var selected = detected.firstOrNull {
+                    !history.shouldSkip(it.shift.identifier, settings.shiftCooldownMs)
                 }
-                waitForData(service)
+                val fallbackEnabled = point("first_slot")?.enabled == true
+                when (PreRefreshDecisionPolicy.choose(
+                    loading = finder.hasLoading(slotRoot, settings.loadingTexts),
+                    detectedSlot = selected != null,
+                    visibleTimeRange = finder.hasTimeRange(slotRoot),
+                    fallbackEnabled = fallbackEnabled
+                )) {
+                    PreRefreshDecision.WAIT_FOR_CURRENT_LOADING -> {
+                        waitForData(
+                            service,
+                            service.contentChangeSequence(settings.targetPackage)
+                        )
+                    }
+                    PreRefreshDecision.USE_VISIBLE_SLOT -> {
+                        logs.add("Ca đã hiển thị; bỏ qua vuốt làm mới")
+                    }
+                    PreRefreshDecision.REFRESH -> {
+                        val contentSequenceBeforeRefresh =
+                            service.contentChangeSequence(settings.targetPackage)
+                        if (!refresh(service)) {
+                            delay(refreshIntervalMs)
+                            continue
+                        }
+                        waitForData(service, contentSequenceBeforeRefresh)
+                    }
+                }
                 if (!canAct(service)) continue
 
                 transition(AutomationState.CHECKING_SLOTS, "Đang tìm ca")
-                val refreshedRoot = service.currentRoot()
-                if (finder.hasLoading(refreshedRoot, settings.loadingTexts)) {
+                slotRoot = service.currentRoot()
+                if (finder.hasLoading(slotRoot, settings.loadingTexts)) {
                     logs.add("Danh sách vẫn đang tải; chưa thao tác")
-                    delay(settings.refreshIntervalMs)
+                    delay(refreshIntervalMs)
                     continue
                 }
-                val (_, height) = service.displaySize()
-                val detected = finder.detectShifts(refreshedRoot, height)
-                val selected = detected.firstOrNull {
+                detected = finder.detectShifts(slotRoot, height)
+                selected = detected.firstOrNull {
                     !history.shouldSkip(it.shift.identifier, settings.shiftCooldownMs)
                 }
                 val selection = SlotSelectionPolicy.choose(
                     hasDetectedSlot = selected != null,
-                    hasTimeRangeSignal = finder.hasTimeRange(refreshedRoot),
-                    fallbackEnabled = point("first_slot")?.enabled == true
+                    hasTimeRangeSignal = finder.hasTimeRange(slotRoot),
+                    fallbackEnabled = fallbackEnabled
                 )
                 if (selection == SlotSelection.WAIT_FOR_NEXT_REFRESH) {
-                    val message = if (finder.containsAny(refreshedRoot, settings.noSlotTexts)) {
+                    val message = if (finder.containsAny(slotRoot, settings.noSlotTexts)) {
                         "Chưa có ca"
                     } else {
                         "Chưa phát hiện thẻ ca; tiếp tục làm mới"
                     }
                     logs.add(message)
-                    delay(settings.refreshIntervalMs)
+                    delay(refreshIntervalMs)
                     continue
                 }
-                val shift = selected?.shift ?: fallbackShift(refreshedRoot)
+                val shift = selected?.shift ?: fallbackShift(slotRoot)
                 if (history.shouldSkip(shift.identifier, settings.shiftCooldownMs)) {
                     logs.add("Ca vừa được xử lý, đang trong thời gian cooldown")
-                    delay(settings.refreshIntervalMs)
+                    delay(refreshIntervalMs)
                     continue
                 }
                 logs.add("Phát hiện ca ${shift.startTime}–${shift.endTime}")
@@ -149,7 +191,8 @@ class AutomationEngine(
                 }
                 logs.add("Đã mở trang chi tiết")
                 val registerNode = findRegisterButton(service)
-                if (registerNode == null) {
+                val registerPointEnabled = point("register")?.enabled == true
+                if (registerNode == null && (!isDetail(service) || !registerPointEnabled)) {
                     logs.add("Không tìm thấy nút đăng ký", LogLevel.ERROR)
                     history.record(shift.identifier, ShiftAttemptStatus.SKIPPED)
                     returnToList(service)
@@ -157,7 +200,7 @@ class AutomationEngine(
                 }
 
                 transition(AutomationState.REGISTERING, "Đang đăng ký")
-                if (!safeClickNode(service, registerNode)) {
+                if (!clickRegisterButton(service, registerNode)) {
                     logs.add("Không thể bấm nút đăng ký", LogLevel.ERROR)
                     history.record(shift.identifier, ShiftAttemptStatus.ERROR)
                     returnToList(service)
@@ -196,7 +239,7 @@ class AutomationEngine(
                         returnToList(service)
                     }
                 }
-                delay(settings.refreshIntervalMs)
+                delay(refreshIntervalMs)
             }
         } catch (_: CancellationException) {
             // Stop là tức thời: mọi delay và callback đang chờ đều bị hủy ở đây.
@@ -242,7 +285,7 @@ class AutomationEngine(
             CoordinateConverter.toReal(start.yRatio, height).toFloat(),
             CoordinateConverter.toReal(end.xRatio, width).toFloat(),
             CoordinateConverter.toReal(end.yRatio, height).toFloat(),
-            settings.refreshSwipeDurationMs
+            refreshSwipeDurationMs
         )
         if (ok) {
             refreshCount++
@@ -252,18 +295,37 @@ class AutomationEngine(
         return ok
     }
 
-    private suspend fun waitForData(service: AutoRegisterAccessibilityService) {
+    private suspend fun waitForData(
+        service: AutoRegisterAccessibilityService,
+        contentSequenceBeforeRefresh: Long
+    ) {
         transition(AutomationState.WAITING_FOR_DATA, "Đang chờ dữ liệu")
-        val timeout = max(settings.waitAfterSwipeMs, 5_000)
-        val start = System.currentTimeMillis()
-        delay(settings.waitAfterSwipeMs.coerceAtMost(timeout))
-        while (
-            stopToken.isActive &&
-            System.currentTimeMillis() - start < timeout &&
-            finder.hasLoading(service.currentRoot(), settings.loadingTexts)
-        ) {
+        val timeout = max(waitAfterSwipeMs, 5_000)
+        val started = System.currentTimeMillis()
+        val settlePolicy = RefreshContentSettlePolicy(waitAfterSwipeMs)
+        while (stopToken.isActive && System.currentTimeMillis() - started < timeout) {
             waitWhilePaused()
-            delay(200)
+            if (!canAct(service)) return
+            val now = System.currentTimeMillis()
+            val root = service.currentRoot()
+            val lastContentEventAt = service.lastContentEventAtMs(settings.targetPackage)
+            val quietForMs = if (lastContentEventAt == 0L) {
+                Long.MAX_VALUE
+            } else {
+                (now - lastContentEventAt).coerceAtLeast(0)
+            }
+            if (settlePolicy.isReady(
+                    elapsedMs = now - started,
+                    loading = finder.hasLoading(root, settings.loadingTexts),
+                    contentChanged = service.contentChangeSequence(settings.targetPackage) >
+                        contentSequenceBeforeRefresh,
+                    quietForMs = quietForMs,
+                    priorityContentVisible = finder.hasTimeRange(root)
+                )
+            ) {
+                return
+            }
+            delay(40)
         }
     }
 
@@ -274,21 +336,30 @@ class AutomationEngine(
         transition(AutomationState.OPENING_SLOT, "Đang mở ca")
         if (detected != null) {
             if (safeClickNode(service, detected.node)) {
-                delay(settings.waitAfterOpenSlotMs)
-                if (isDetail(service)) return true
+                if (waitForDetail(service)) return true
             }
             if (safeClickScreenPoint(service, detected.bounds.centerX().toFloat(), detected.bounds.centerY().toFloat())) {
-                delay(settings.waitAfterOpenSlotMs)
-                if (isDetail(service)) return true
+                if (waitForDetail(service)) return true
             }
         }
         for (id in listOf("first_slot", "slot_fallback")) {
             val coordinate = point(id) ?: continue
             if (!coordinate.enabled || !safeClickRatio(service, coordinate)) continue
-            delay(settings.waitAfterOpenSlotMs)
-            if (isDetail(service)) return true
+            if (waitForDetail(service)) return true
         }
         return false
+    }
+
+    private suspend fun waitForDetail(service: AutoRegisterAccessibilityService): Boolean {
+        val started = System.currentTimeMillis()
+        val timeoutMs = settings.waitAfterOpenSlotMs.coerceAtLeast(500)
+        while (stopToken.isActive && System.currentTimeMillis() - started < timeoutMs) {
+            waitWhilePaused()
+            if (!canAct(service, allowNonSchedule = true)) return false
+            if (isDetail(service)) return true
+            delay(50)
+        }
+        return isDetail(service)
     }
 
     private suspend fun findRegisterButton(
@@ -307,40 +378,153 @@ class AutomationEngine(
                 CoordinateConverter.toReal(end.yRatio, height).toFloat(),
                 settings.loadSwipeDurationMs
             )
-            delay(600)
+            val started = System.currentTimeMillis()
+            while (stopToken.isActive && System.currentTimeMillis() - started < 600) {
+                finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)?.let { return it }
+                delay(50)
+            }
         }
         return finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)
+    }
+
+    private suspend fun clickRegisterButton(
+        service: AutoRegisterAccessibilityService,
+        node: android.view.accessibility.AccessibilityNodeInfo?
+    ): Boolean {
+        if (node != null) {
+            if (safeClickNode(service, node)) {
+                logs.add("Đã click nút đăng ký bằng Accessibility")
+                return true
+            }
+            val bounds = android.graphics.Rect().also(node::getBoundsInScreen)
+            if (!bounds.isEmpty &&
+                safeClickScreenPoint(service, bounds.centerX().toFloat(), bounds.centerY().toFloat())
+            ) {
+                logs.add("Đã click tâm vùng chữ đăng ký")
+                return true
+            }
+        }
+        val fallback = point("register")
+        if (fallback?.enabled == true && isDetail(service) && safeClickRatio(service, fallback)) {
+            logs.add("Đã click điểm đăng ký dự phòng")
+            return true
+        }
+        return false
     }
 
     private suspend fun awaitRegistrationResult(
         service: AutoRegisterAccessibilityService
     ): RegistrationResult {
         transition(AutomationState.CHECKING_RESULT, "Đang kiểm tra kết quả")
-        val retry = RetryPolicy(settings.maxRetry)
+        val networkRetry = RetryPolicy(settings.maxRetry)
+        val acknowledgement = RegistrationAcknowledgementPolicy(settings.maxRetry)
         val started = System.currentTimeMillis()
+        acknowledgement.recordInitialClick(started)
+        var lastPublishedSecond = -1L
         while (stopToken.isActive && System.currentTimeMillis() - started < settings.registrationTimeoutMs) {
             waitWhilePaused()
             if (!canAct(service, allowNonSchedule = true)) return RegistrationResult.UNKNOWN
             val root = service.currentRoot()
             when (val result = resultDetector.detect(root, settings)) {
                 RegistrationResult.NETWORK_ERROR -> {
-                    if (!retry.recordRetry()) return result
-                    logs.add("Lỗi mạng, thử lại ${retry.retryCount}/${settings.maxRetry}", LogLevel.ERROR)
-                    delay(settings.refreshIntervalMs)
+                    if (!networkRetry.recordRetry()) return result
+                    logs.add(
+                        "Lỗi mạng, thử lại ${networkRetry.retryCount}/${settings.maxRetry}",
+                        LogLevel.ERROR
+                    )
+                    delay(refreshIntervalMs)
                     val button = finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)
-                    if (button != null) safeClickNode(service, button)
+                    if (button != null && isDetail(service)) {
+                        retryRegisterButton(service)
+                    }
                 }
                 RegistrationResult.UNKNOWN -> {
-                    if (System.currentTimeMillis() - started >= 500 && isScheduleScreen(root)) {
+                    val now = System.currentTimeMillis()
+                    val elapsed = now - started
+                    if (elapsed >= 500 && isScheduleScreen(root)) {
                         logs.add("Ứng dụng đã tự quay lại danh sách sau khi đăng ký")
                         return RegistrationResult.SUCCESS
                     }
-                    delay(200)
+
+                    val registerButton = finder.findByTexts(root, settings.registerButtonTexts)
+                    if (acknowledgement.shouldRetry(
+                            nowMs = now,
+                            registerButtonVisible = registerButton != null && isDetail(service),
+                            loading = finder.hasLoading(root, settings.loadingTexts)
+                        ) &&
+                        acknowledgement.recordRetry(now)
+                    ) {
+                        val retryNumber = acknowledgement.retryCount
+                        transition(
+                            AutomationState.REGISTERING,
+                            "Nút chưa phản hồi • thử lại $retryNumber/${acknowledgement.maximumRetries}"
+                        )
+                        logs.add(
+                            "Nút đăng ký vẫn còn; bấm xác nhận lại " +
+                                "$retryNumber/${acknowledgement.maximumRetries}"
+                        )
+                        val clicked = retryRegisterButton(service)
+                        transition(
+                            AutomationState.CHECKING_RESULT,
+                            if (clicked) {
+                                "Đã bấm lại • đang chờ xác nhận"
+                            } else {
+                                "Chưa thể bấm lại • tiếp tục kiểm tra"
+                            }
+                        )
+                        if (!clicked) {
+                            logs.add("Lần bấm xác nhận lại không thực hiện được", LogLevel.ERROR)
+                        }
+                        continue
+                    }
+
+                    val elapsedSecond = elapsed / 1_000
+                    if (elapsedSecond != lastPublishedSecond) {
+                        lastPublishedSecond = elapsedSecond
+                        publish("Đang chờ phản hồi • ${elapsedSecond + 1}s")
+                    }
+                    delay(80)
                 }
                 else -> return result
             }
         }
+        publish("Hết thời gian chờ kết quả đăng ký")
         return RegistrationResult.UNKNOWN
+    }
+
+    private suspend fun retryRegisterButton(
+        service: AutoRegisterAccessibilityService
+    ): Boolean {
+        if (!isDetail(service) ||
+            resultDetector.detect(service.currentRoot(), settings) != RegistrationResult.UNKNOWN
+        ) {
+            return false
+        }
+        val node = finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)
+        if (node != null) {
+            val target = finder.clickable(node) ?: node
+            val bounds = android.graphics.Rect().also(target::getBoundsInScreen)
+            if (!bounds.isEmpty && isDetail(service) &&
+                safeClickScreenPoint(
+                    service,
+                    bounds.centerX().toFloat(),
+                    bounds.centerY().toFloat()
+                )
+            ) {
+                logs.add("Đã bấm lại bằng gesture tại nút đăng ký")
+                return true
+            }
+            if (isDetail(service) && safeClickNode(service, node)) {
+                logs.add("Đã bấm lại nút đăng ký bằng Accessibility")
+                return true
+            }
+        }
+        val fallback = point("register")
+        if (fallback?.enabled == true && isDetail(service) && safeClickRatio(service, fallback)) {
+            logs.add("Đã bấm lại điểm đăng ký dự phòng")
+            return true
+        }
+        return false
     }
 
     private suspend fun returnToList(service: AutoRegisterAccessibilityService) {
@@ -380,8 +564,14 @@ class AutomationEngine(
         if (!canAct(service, allowNonSchedule = true) || !clickLimiter.tryAcquire()) return false
         debounceClick()
         if (!stopToken.isActive || paused.get()) return false
-        return service.clickRatio(point.xRatio, point.yRatio, settings.targetPackage).also {
-            if (it) lastClickAt = System.currentTimeMillis()
+        FloatingOverlayService.setAutomatedGesturePassthrough(true)
+        return try {
+            delay(24)
+            service.clickRatio(point.xRatio, point.yRatio, settings.targetPackage).also {
+                if (it) lastClickAt = System.currentTimeMillis()
+            }
+        } finally {
+            FloatingOverlayService.setAutomatedGesturePassthrough(false)
         }
     }
 
@@ -393,13 +583,19 @@ class AutomationEngine(
         if (!canAct(service, allowNonSchedule = true) || !clickLimiter.tryAcquire()) return false
         debounceClick()
         if (!stopToken.isActive || paused.get()) return false
-        return GestureController(service).click(x, y).also {
-            if (it) lastClickAt = System.currentTimeMillis()
+        FloatingOverlayService.setAutomatedGesturePassthrough(true)
+        return try {
+            delay(24)
+            GestureController(service).click(x, y).also {
+                if (it) lastClickAt = System.currentTimeMillis()
+            }
+        } finally {
+            FloatingOverlayService.setAutomatedGesturePassthrough(false)
         }
     }
 
     private suspend fun debounceClick() {
-        val remaining = settings.clickDebounceMs - (System.currentTimeMillis() - lastClickAt)
+        val remaining = clickDebounceMs - (System.currentTimeMillis() - lastClickAt)
         if (remaining > 0) delay(remaining)
     }
 
@@ -447,10 +643,10 @@ class AutomationEngine(
 
     private fun fallbackShift(root: android.view.accessibility.AccessibilityNodeInfo?) = ShiftInfo(
         date = LocalDate.now().toString(),
-        startTime = finder.allNodes(root).asSequence()
+        startTime = finder.visibleNodes(root).asSequence()
             .flatMap { com.autoregistershift.util.TimeRegex.findAll(finder.nodeText(it)).asSequence() }
             .firstOrNull() ?: "unknown",
-        endTime = finder.allNodes(root).asSequence()
+        endTime = finder.visibleNodes(root).asSequence()
             .flatMap { com.autoregistershift.util.TimeRegex.findAll(finder.nodeText(it)).asSequence() }
             .drop(1).firstOrNull() ?: "unknown",
         content = "semantic-coordinate:${point("first_slot")?.xRatio}:${point("first_slot")?.yRatio}"
@@ -501,4 +697,5 @@ class AutomationEngine(
             vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
         }
     }
+
 }

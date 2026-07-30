@@ -7,7 +7,9 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.autoregistershift.automation.AutomationController
 import com.autoregistershift.automation.GestureController
 import com.autoregistershift.util.CoordinateConverter
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -15,6 +17,8 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
     private val gestureMutex = Mutex()
     private var lastEventAt = 0L
     private val connected = AtomicBoolean(false)
+    private val contentSequences = ConcurrentHashMap<String, AtomicLong>()
+    private val lastContentEventAt = ConcurrentHashMap<String, Long>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -27,9 +31,14 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
         val type = event?.eventType ?: return
         if (type !in monitoredEvents) return
         val now = System.currentTimeMillis()
+        val eventPackage = event.packageName?.toString().orEmpty()
+        if (eventPackage.isNotBlank() && type in contentChangeEvents) {
+            contentSequences.computeIfAbsent(eventPackage) { AtomicLong() }.incrementAndGet()
+            lastContentEventAt[eventPackage] = now
+        }
         if (now - lastEventAt < EVENT_DEBOUNCE_MS) return
         lastEventAt = now
-        AutomationController.onUiEvent(event.packageName?.toString().orEmpty())
+        AutomationController.onUiEvent(eventPackage)
     }
 
     override fun onInterrupt() = Unit
@@ -50,6 +59,12 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
         val metrics: DisplayMetrics = resources.displayMetrics
         return metrics.widthPixels to metrics.heightPixels
     }
+
+    fun contentChangeSequence(packageName: String): Long =
+        contentSequences[packageName]?.get() ?: 0L
+
+    fun lastContentEventAtMs(packageName: String): Long =
+        lastContentEventAt[packageName] ?: 0L
 
     suspend fun clickRatio(xRatio: Float, yRatio: Float, requiredPackage: String): Boolean {
         if (requiredPackage.isBlank() || currentPackage() != requiredPackage) return false
@@ -72,6 +87,10 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED
+        )
+        private val contentChangeEvents = setOf(
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         )
 
         fun isEnabled(): Boolean = instance != null
