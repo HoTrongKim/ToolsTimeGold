@@ -25,6 +25,7 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
         connected.set(true)
         instance = this
         AutomationController.onAccessibilityConnectionChanged(true)
+        AutomationController.restoreIfNeeded(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

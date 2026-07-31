@@ -233,11 +233,26 @@ fun MainScreen(
             }
 
             SectionCard("Tùy chọn nhanh") {
+                ToggleRow("Chạy liên tục 24/7 và tự phục hồi", settings.continuousMode) {
+                    AutomationController.setContinuousMode(it)
+                }
+                Text(
+                    "Khi bật, giới hạn thời gian/số ca được bỏ qua và màn hình được giữ sáng. Tool vẫn ngừng click khi khóa máy hoặc rời ứng dụng mục tiêu.",
+                    style = MaterialTheme.typography.bodySmall
+                )
                 ToggleRow("Đăng ký tất cả ca xuất hiện", settings.registerAll) {
                     scope.launch { repository.update { value -> value.copy(registerAll = it) } }
                 }
                 ToggleRow("Dừng sau khi đăng ký thành công", settings.stopAfterSuccess) {
-                    scope.launch { repository.update { value -> value.copy(stopAfterSuccess = it) } }
+                    if (it && settings.continuousMode) AutomationController.setContinuousMode(false)
+                    scope.launch {
+                        repository.update { value ->
+                            value.copy(
+                                stopAfterSuccess = it,
+                                continuousMode = if (it) false else value.continuousMode
+                            )
+                        }
+                    }
                 }
                 ToggleRow("Tự quay lại danh sách", settings.autoReturnToList) {
                     scope.launch { repository.update { value -> value.copy(autoReturnToList = it) } }

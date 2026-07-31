@@ -15,10 +15,13 @@ import com.autoregistershift.ui.theme.AutoRegisterTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val requestedDestination = intent.getStringExtra(EXTRA_DESTINATION)
+            ?.takeIf { it in setOf("main", "settings", "coordinates", "logs") }
+            ?: "main"
         setContent {
             AutoRegisterTheme {
                 val navController = rememberNavController()
-                NavHost(navController = navController, startDestination = "main") {
+                NavHost(navController = navController, startDestination = requestedDestination) {
                     composable("main") {
                         MainScreen(
                             onSettings = { navController.navigate("settings") },
@@ -38,5 +41,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_DESTINATION = "destination"
     }
 }

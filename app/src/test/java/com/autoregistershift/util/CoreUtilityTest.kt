@@ -1,6 +1,7 @@
 package com.autoregistershift.util
 
 import com.autoregistershift.automation.AutomationStopToken
+import com.autoregistershift.automation.ContinuousRunPolicy
 import com.autoregistershift.automation.DuplicateGuard
 import com.autoregistershift.automation.RegistrationAcknowledgementPolicy
 import com.autoregistershift.automation.RefreshContentSettlePolicy
@@ -83,6 +84,32 @@ class CoreUtilityTest {
         token.stop()
         token.stop()
         assertFalse(token.isActive)
+    }
+
+    @Test
+    fun continuousModeIgnoresRuntimeAndRegistrationLimits() {
+        assertFalse(ContinuousRunPolicy.maximumRunReached(true, 10_000_000, 1))
+        assertFalse(ContinuousRunPolicy.maximumRegistrationsReached(true, 999, 1))
+        assertFalse(ContinuousRunPolicy.shouldStopForUnknownScreen(true, 999, 5))
+
+        assertTrue(ContinuousRunPolicy.maximumRunReached(false, 60_000, 1))
+        assertTrue(ContinuousRunPolicy.maximumRegistrationsReached(false, 2, 2))
+        assertTrue(ContinuousRunPolicy.shouldStopForUnknownScreen(false, 5, 5))
+    }
+
+    @Test
+    fun aSecondDistinctShiftIsNotBlockedByFirstShiftSuccess() {
+        val entries = listOf(
+            ShiftHistoryEntry("2026-07-31|10:00|14:00|Khu 1", ShiftAttemptStatus.SUCCESS, 1_000)
+        )
+        assertFalse(
+            DuplicateGuard.shouldSkip(
+                entries,
+                "2026-07-31|14:00|17:00|Khu 1",
+                30_000,
+                2_000
+            )
+        )
     }
 
     @Test

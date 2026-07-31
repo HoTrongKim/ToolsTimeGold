@@ -119,6 +119,31 @@ class ScreenAnalyzerTest {
     }
 
     @Test
+    fun detailScreenNeverBecomesScheduleWhenRegisterButtonDisappears() {
+        assertFalse(
+            ScreenKindPolicy.isSchedule(
+                hasScheduleMarker = true,
+                hasNoSlotMarker = false,
+                hasDetailMarker = true,
+                hasRegisterButton = false
+            )
+        )
+        assertTrue(ScreenKindPolicy.isDetail(hasDetailMarker = true, hasRegisterButton = false))
+    }
+
+    @Test
+    fun realScheduleScreenIsRecognizedWithoutDetailMarkers() {
+        assertTrue(
+            ScreenKindPolicy.isSchedule(
+                hasScheduleMarker = true,
+                hasNoSlotMarker = true,
+                hasDetailMarker = false,
+                hasRegisterButton = false
+            )
+        )
+    }
+
+    @Test
     fun fullShift() {
         assertTrue(analyze(node("Ca đã đầy")).full)
     }

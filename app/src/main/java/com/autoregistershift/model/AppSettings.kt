@@ -52,5 +52,6 @@ data class AppSettings(
     val vibrateOnSuccess: Boolean = true,
     val showOverlay: Boolean = true,
     val keepScreenOn: Boolean = false,
+    val continuousMode: Boolean = true,
     val coordinates: List<CoordinatePoint> = CoordinatePoint.defaults
 )

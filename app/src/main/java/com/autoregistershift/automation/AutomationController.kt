@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import com.autoregistershift.data.LogRepository
+import com.autoregistershift.data.AutomationSessionStore
 import com.autoregistershift.data.SettingsRepository
 import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.LogLevel
@@ -46,6 +47,7 @@ object AutomationController {
         initialize(context)
         val existing = engine
         if (existing?.isPaused == true) {
+            AutomationSessionStore(context.applicationContext).markRunning()
             existing.resume()
             return
         }
@@ -66,6 +68,7 @@ object AutomationController {
                     logs.add("Không thể bắt đầu: chưa cấu hình package mục tiêu", LogLevel.ERROR)
                     return@withLock
                 }
+                AutomationSessionStore(app).markRunning()
                 stopping.set(false)
                 ContextCompat.startForegroundService(
                     app,
@@ -96,6 +99,7 @@ object AutomationController {
     }
 
     fun pause() {
+        appContext?.let { AutomationSessionStore(it).markPaused() }
         engine?.pause()
     }
 
@@ -108,8 +112,33 @@ object AutomationController {
         }
     }
 
+    fun setContinuousMode(enabled: Boolean) {
+        engine?.updateContinuousMode(enabled)
+        val app = appContext ?: return
+        scope.launch {
+            SettingsRepository(app).update { current ->
+                current.copy(
+                    continuousMode = enabled,
+                    stopAfterSuccess = if (enabled) false else current.stopAfterSuccess
+                )
+            }
+            LogRepository(app).add(
+                if (enabled) "Đã bật chế độ chạy liên tục 24/7" else "Đã tắt chế độ chạy liên tục"
+            )
+        }
+    }
+
+    fun restoreIfNeeded(context: Context) {
+        initialize(context)
+        val session = AutomationSessionStore(context.applicationContext)
+        if (session.shouldRun && !session.isPaused && automationJob?.isActive != true) {
+            startOrResume(context.applicationContext)
+        }
+    }
+
     fun stop() {
         if (!stopping.compareAndSet(false, true)) return
+        appContext?.let { AutomationSessionStore(it).markStopped() }
         engine?.stop()
         automationJob?.cancel()
         automationJob = null

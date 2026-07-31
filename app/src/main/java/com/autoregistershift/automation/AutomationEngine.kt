@@ -46,6 +46,7 @@ class AutomationEngine(
     @Volatile private var maxRefreshesPerMinute = settings.maxRefreshesPerMinute
     @Volatile private var clickDebounceMs = settings.clickDebounceMs
     @Volatile private var refreshSwipeDurationMs = settings.refreshSwipeDurationMs
+    @Volatile private var continuousMode = settings.continuousMode
     private val clickLimiter = RateLimiter(limit = { settings.maxClicksPerMinute })
     private val refreshLimiter = RateLimiter(limit = { maxRefreshesPerMinute })
     private var refreshCount = 0
@@ -64,10 +65,45 @@ class AutomationEngine(
         refreshSwipeDurationMs = preset.refreshSwipeDurationMs
     }
 
+    fun updateContinuousMode(enabled: Boolean) {
+        continuousMode = enabled
+        publish(if (enabled) "Chế độ 24/7 đang bật" else "Chế độ 24/7 đã tắt")
+    }
+
     suspend fun run() {
+        transition(AutomationState.WAITING_FOR_TARGET_APP, "Tool bắt đầu")
+        logs.add("Tool bắt đầu${if (continuousMode) " • chế độ 24/7" else ""}")
         try {
-            transition(AutomationState.WAITING_FOR_TARGET_APP, "Tool bắt đầu")
-            logs.add("Tool bắt đầu")
+            while (stopToken.isActive) {
+                try {
+                    runAutomationLoop()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    logs.add(
+                        "Lỗi runtime: ${error.message ?: error::class.java.simpleName}",
+                        LogLevel.ERROR
+                    )
+                    transition(
+                        AutomationState.ERROR,
+                        "Có lỗi • ${if (continuousMode) "đang tự phục hồi" else "đã dừng"}"
+                    )
+                    if (!continuousMode) {
+                        stopToken.stop()
+                        break
+                    }
+                    delay(1_500)
+                    logs.add("Đã tự phục hồi vòng chạy", LogLevel.ACTIVITY)
+                }
+            }
+        } catch (_: CancellationException) {
+            // Stop là tức thời: mọi delay và gesture đang chờ đều bị hủy.
+        } finally {
+            stopToken.stop()
+        }
+    }
+
+    private suspend fun runAutomationLoop() {
             while (stopToken.isActive) {
                 currentCoroutineContext().ensureActive()
                 waitWhilePaused()
@@ -97,21 +133,35 @@ class AutomationEngine(
                     failAndStop("Phát hiện CAPTCHA/OTP/xác minh; tool đã dừng")
                     break
                 }
+                if (continuousMode && isDetail(service)) {
+                    logs.add("Phát hiện còn ở trang chi tiết • tự quay lại danh sách")
+                    returnToList(service)
+                    delay(250)
+                    continue
+                }
                 if (!isScheduleScreen(root)) {
                     unknownScreenCount++
                     transition(
                         AutomationState.WAITING_FOR_SCHEDULE_SCREEN,
                         "Đang chờ đúng màn hình đăng ký ca"
                     )
-                    if (unknownScreenCount >= settings.maxUnknownScreens) {
+                    if (ContinuousRunPolicy.shouldStopForUnknownScreen(
+                            continuousMode,
+                            unknownScreenCount,
+                            settings.maxUnknownScreens
+                        )
+                    ) {
                         failAndStop("Giao diện không xác định quá nhiều lần")
                         break
                     }
+                    if (continuousMode && unknownScreenCount == settings.maxUnknownScreens) {
+                        logs.addRoutine("Chế độ 24/7 đang chờ người dùng quay lại màn hình danh sách")
+                    }
+                    unknownScreenCount = unknownScreenCount.coerceAtMost(settings.maxUnknownScreens)
                     delay(700)
                     continue
                 }
                 unknownScreenCount = 0
-                logs.add("Đã nhận diện màn hình đăng ký")
 
                 val (_, height) = service.displaySize()
                 var slotRoot = root
@@ -150,7 +200,7 @@ class AutomationEngine(
                 transition(AutomationState.CHECKING_SLOTS, "Đang tìm ca")
                 slotRoot = service.currentRoot()
                 if (finder.hasLoading(slotRoot, settings.loadingTexts)) {
-                    logs.add("Danh sách vẫn đang tải; chưa thao tác")
+                    logs.addRoutine("Tool đang chạy • danh sách đang tải")
                     delay(refreshIntervalMs)
                     continue
                 }
@@ -169,13 +219,13 @@ class AutomationEngine(
                     } else {
                         "Chưa phát hiện thẻ ca; tiếp tục làm mới"
                     }
-                    logs.add(message)
+                    logs.addRoutine("Tool đang chạy ổn định • $message • đã làm mới $refreshCount lần")
                     delay(refreshIntervalMs)
                     continue
                 }
                 val shift = selected?.shift ?: fallbackShift(slotRoot)
                 if (history.shouldSkip(shift.identifier, settings.shiftCooldownMs)) {
-                    logs.add("Ca vừa được xử lý, đang trong thời gian cooldown")
+                    logs.addRoutine("Tool đang chạy • ca vừa xử lý đang trong cooldown")
                     delay(refreshIntervalMs)
                     continue
                 }
@@ -215,12 +265,23 @@ class AutomationEngine(
                         logs.add("Đăng ký thành công", LogLevel.SUCCESS)
                         notifySuccess()
                         transition(AutomationState.CHECKING_RESULT, "Đăng ký thành công")
-                        if (settings.stopAfterSuccess || successCount >= settings.maxRegistrations) {
+                        if (settings.stopAfterSuccess ||
+                            ContinuousRunPolicy.maximumRegistrationsReached(
+                                continuousMode,
+                                successCount,
+                                settings.maxRegistrations
+                            )
+                        ) {
                             stop()
                             onTerminalStop()
                             break
                         }
-                    if (settings.autoReturnToList) returnToList(service)
+                        if (settings.autoReturnToList && !returnToList(service)) {
+                            logs.add(
+                                "Đăng ký thành công nhưng chưa xác nhận được màn hình danh sách; đang chờ phục hồi",
+                                LogLevel.ERROR
+                            )
+                        }
                     }
                     RegistrationResult.FULL -> {
                         history.record(shift.identifier, ShiftAttemptStatus.FULL)
@@ -241,14 +302,6 @@ class AutomationEngine(
                 }
                 delay(refreshIntervalMs)
             }
-        } catch (_: CancellationException) {
-            // Stop là tức thời: mọi delay và callback đang chờ đều bị hủy ở đây.
-        } catch (error: Throwable) {
-            logs.add("Lỗi: ${error.message ?: error::class.java.simpleName}", LogLevel.ERROR)
-            transition(AutomationState.ERROR, "Có lỗi: ${error.message ?: "không xác định"}")
-        } finally {
-            stopToken.stop()
-        }
     }
 
     fun pause() {
@@ -272,7 +325,7 @@ class AutomationEngine(
     private suspend fun refresh(service: AutoRegisterAccessibilityService): Boolean {
         transition(AutomationState.REFRESHING, "Đang làm mới")
         if (!refreshLimiter.tryAcquire()) {
-            logs.add("Đã đạt giới hạn làm mới mỗi phút; đang chờ", LogLevel.ERROR)
+            logs.addRoutine("Tool đang chạy • đã đạt giới hạn làm mới an toàn mỗi phút")
             delay(3_000)
             return false
         }
@@ -289,7 +342,9 @@ class AutomationEngine(
         )
         if (ok) {
             refreshCount++
-            logs.add("Đang làm mới danh sách")
+            logs.addRoutine(
+                "Tool đang chạy ổn định • đã làm mới $refreshCount lần • thành công $successCount ca"
+            )
             publish()
         }
         return ok
@@ -527,17 +582,41 @@ class AutomationEngine(
         return false
     }
 
-    private suspend fun returnToList(service: AutoRegisterAccessibilityService) {
+    private suspend fun returnToList(service: AutoRegisterAccessibilityService): Boolean {
         transition(AutomationState.RETURNING_TO_LIST, "Đang quay lại danh sách")
-        if (!canAct(service, allowNonSchedule = true)) return
-        if (isScheduleScreen(service.currentRoot())) {
-            logs.add("Đã ở màn hình danh sách; không thực hiện Back")
-            return
+        repeat(MAX_RETURN_ATTEMPTS) { attempt ->
+            if (!stopToken.isActive || paused.get() || !deviceReady()) return false
+            if (service.currentPackage() != settings.targetPackage) return false
+            val root = service.currentRoot()
+            if (isScheduleScreen(root)) {
+                logs.add("Đã xác nhận quay lại danh sách ca")
+                return true
+            }
+            if (finder.containsAny(root, settings.prohibitedTexts)) return false
+
+            val backAccepted = GestureController(service).back()
+            if (!backAccepted) {
+                point("back_fallback")?.takeIf { it.enabled }?.let { safeClickRatio(service, it) }
+            }
+
+            val waitStartedAt = System.currentTimeMillis()
+            while (stopToken.isActive &&
+                System.currentTimeMillis() - waitStartedAt < RETURN_CONFIRM_TIMEOUT_MS
+            ) {
+                waitWhilePaused()
+                if (service.currentPackage() != settings.targetPackage) return false
+                if (isScheduleScreen(service.currentRoot())) {
+                    logs.add("Đã xác nhận quay lại danh sách ca")
+                    return true
+                }
+                delay(80)
+            }
+            if (attempt < MAX_RETURN_ATTEMPTS - 1) {
+                logs.add("Chưa về danh sách • thử Back lại ${attempt + 2}/$MAX_RETURN_ATTEMPTS")
+            }
         }
-        if (!GestureController(service).back()) {
-            point("back_fallback")?.takeIf { it.enabled }?.let { safeClickRatio(service, it) }
-        }
-        delay(700)
+        logs.add("Không xác nhận được màn hình danh sách sau khi Back", LogLevel.ERROR)
+        return false
     }
 
     private suspend fun closeDialogIfConfigured(service: AutoRegisterAccessibilityService) {
@@ -601,14 +680,19 @@ class AutomationEngine(
 
     private fun isDetail(service: AutoRegisterAccessibilityService): Boolean {
         val root = service.currentRoot()
-        return service.currentPackage() == settings.targetPackage &&
-            (finder.containsAny(root, settings.detailScreenTexts) ||
-                finder.containsAny(root, settings.registerButtonTexts))
+        return service.currentPackage() == settings.targetPackage && ScreenKindPolicy.isDetail(
+            hasDetailMarker = finder.containsAny(root, settings.detailScreenTexts),
+            hasRegisterButton = finder.containsAny(root, settings.registerButtonTexts)
+        )
     }
 
     private fun isScheduleScreen(root: android.view.accessibility.AccessibilityNodeInfo?): Boolean =
-        finder.containsAny(root, settings.scheduleScreenTexts) &&
-            !finder.containsAny(root, settings.registerButtonTexts)
+        ScreenKindPolicy.isSchedule(
+            hasScheduleMarker = finder.containsAny(root, settings.scheduleScreenTexts),
+            hasNoSlotMarker = finder.containsAny(root, settings.noSlotTexts),
+            hasDetailMarker = finder.containsAny(root, settings.detailScreenTexts),
+            hasRegisterButton = finder.containsAny(root, settings.registerButtonTexts)
+        )
 
     private fun canAct(
         service: AutoRegisterAccessibilityService,
@@ -630,8 +714,11 @@ class AutomationEngine(
         while (stopToken.isActive && paused.get()) delay(150)
     }
 
-    private fun maximumRunReached(): Boolean =
-        System.currentTimeMillis() - startedAt >= settings.maxRunMinutes.coerceAtLeast(1) * 60_000L
+    private fun maximumRunReached(): Boolean = ContinuousRunPolicy.maximumRunReached(
+        continuousMode = continuousMode,
+        elapsedMs = System.currentTimeMillis() - startedAt,
+        maximumMinutes = settings.maxRunMinutes
+    )
 
     private fun deviceReady(): Boolean {
         val power = context.getSystemService(PowerManager::class.java)
@@ -698,4 +785,8 @@ class AutomationEngine(
         }
     }
 
+    companion object {
+        private const val MAX_RETURN_ATTEMPTS = 3
+        private const val RETURN_CONFIRM_TIMEOUT_MS = 1_100L
+    }
 }

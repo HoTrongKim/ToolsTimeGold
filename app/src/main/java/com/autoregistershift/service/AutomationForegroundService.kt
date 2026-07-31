@@ -39,8 +39,9 @@ class AutomationForegroundService : Service() {
         when (intent?.action) {
             ACTION_PAUSE -> AutomationController.pause()
             ACTION_STOP -> AutomationController.stop()
+            null -> AutomationController.restoreIfNeeded(applicationContext)
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

@@ -60,6 +60,7 @@ class SettingsRepository(private val context: Context) {
         this[Keys.vibrate] = value.vibrateOnSuccess
         this[Keys.overlay] = value.showOverlay
         this[Keys.keepScreen] = value.keepScreenOn
+        this[Keys.continuousMode] = value.continuousMode
         this[Keys.coordinates] = value.coordinates.joinToString("\n") {
             listOf(it.id, it.name, it.xRatio, it.yRatio, it.enabled).joinToString("\t")
         }
@@ -145,6 +146,7 @@ class SettingsRepository(private val context: Context) {
             vibrateOnSuccess = this[Keys.vibrate] ?: defaults.vibrateOnSuccess,
             showOverlay = this[Keys.overlay] ?: defaults.showOverlay,
             keepScreenOn = this[Keys.keepScreen] ?: defaults.keepScreenOn,
+            continuousMode = this[Keys.continuousMode] ?: defaults.continuousMode,
             coordinates = decodeCoordinates(this[Keys.coordinates], defaults.coordinates)
         )
     }
@@ -213,10 +215,11 @@ class SettingsRepository(private val context: Context) {
         val vibrate = booleanPreferencesKey("vibrate")
         val overlay = booleanPreferencesKey("overlay")
         val keepScreen = booleanPreferencesKey("keep_screen")
+        val continuousMode = booleanPreferencesKey("continuous_mode")
         val coordinates = stringPreferencesKey("coordinates")
     }
 
     companion object {
-        private const val CURRENT_SCHEMA_VERSION = 6
+        private const val CURRENT_SCHEMA_VERSION = 7
     }
 }
