@@ -10,6 +10,7 @@ import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.LogLevel
 import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.service.AutomationForegroundService
+import com.autoregistershift.service.AutoRegisterAccessibilityService
 import com.autoregistershift.service.FloatingOverlayService
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
@@ -137,21 +138,34 @@ object AutomationController {
     }
 
     fun stop() {
-        if (!stopping.compareAndSet(false, true)) return
-        appContext?.let { AutomationSessionStore(it).markStopped() }
-        engine?.stop()
-        automationJob?.cancel()
-        automationJob = null
-        engine = null
-        _state.value = _state.value.copy(
-            state = AutomationState.STOPPED,
-            enteredAtMs = System.currentTimeMillis(),
-            message = "Đã dừng"
-        )
-        appContext?.let { app ->
-            app.stopService(Intent(app, FloatingOverlayService::class.java))
-            app.stopService(Intent(app, AutomationForegroundService::class.java))
+        val app = appContext
+        app?.let { AutomationSessionStore(it).markStopped() }
+        if (stopping.compareAndSet(false, true)) {
+            engine?.stop()
+            automationJob?.cancel()
+            automationJob = null
+            engine = null
+            _state.value = _state.value.copy(
+                state = AutomationState.STOPPED,
+                enteredAtMs = System.currentTimeMillis(),
+                message = "Đã dừng"
+            )
         }
+        app?.let { application ->
+            application.stopService(Intent(application, FloatingOverlayService::class.java))
+            application.stopService(Intent(application, AutomationForegroundService::class.java))
+        }
+    }
+
+    fun enterBankingMode(context: Context) {
+        initialize(context)
+        val accessibilityService = AutoRegisterAccessibilityService.instance
+        stop()
+        accessibilityService?.disableForBankingMode()
+        _state.value = StateSnapshot(
+            state = AutomationState.STOPPED,
+            message = "Chế độ ngân hàng • đã tắt tool, nút nổi và Trợ năng"
+        )
     }
 
     fun onUiEvent(packageName: String) {
@@ -159,12 +173,6 @@ object AutomationController {
     }
 
     fun onAccessibilityConnectionChanged(enabled: Boolean) {
-        if (!enabled && automationJob?.isActive == true) {
-            _state.value = _state.value.copy(
-                state = AutomationState.WAITING_FOR_TARGET_APP,
-                enteredAtMs = System.currentTimeMillis(),
-                message = "Đang chờ dịch vụ Trợ năng"
-            )
-        }
+        if (!enabled) stop()
     }
 }

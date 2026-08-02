@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -27,11 +28,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -60,6 +64,7 @@ fun MainScreen(
     val runtime by AutomationController.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var permissionRefresh by remember { mutableIntStateOf(0) }
+    var showBankingModeDialog by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -98,8 +103,16 @@ fun MainScreen(
                 StatusLine("Trợ năng", if (accessibilityEnabled) "Đã bật" else "Chưa bật", accessibilityEnabled)
                 StatusLine("Nút nổi", if (overlayEnabled) "Đã cấp quyền" else "Chưa cấp quyền", overlayEnabled)
                 StatusLine("Thông báo", if (notificationsEnabled) "Đã cấp quyền" else "Chưa cấp quyền", notificationsEnabled)
-                StatusLine("Tool", runtime.message, runtime.state !in setOf(AutomationState.ERROR, AutomationState.STOPPED))
-                Text("Làm mới: ${runtime.refreshCount} • Đăng ký thành công: ${runtime.successCount}")
+                StatusLine(
+                    "Tool",
+                    runtime.message,
+                    runtime.message.startsWith("Chế độ ngân hàng") ||
+                        runtime.state !in setOf(AutomationState.ERROR, AutomationState.STOPPED)
+                )
+                Text(
+                    "Làm mới: ${runtime.refreshCount} • Thành công: ${runtime.successCount} • " +
+                        "Ca đã đặt: ${runtime.fullCount}"
+                )
             }
 
             SectionCard("Quyền cần cấp") {
@@ -129,6 +142,32 @@ fun MainScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Cấp quyền thông báo") }
                 }
+            }
+
+            SectionCard("An toàn khi chuyển khoản") {
+                Text(
+                    "Trước khi mở ứng dụng ngân hàng, hãy bật chế độ này. Tool sẽ dừng hoàn toàn, gỡ nút nổi và tự tắt dịch vụ Trợ năng để tránh ngân hàng chặn thao tác.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Button(
+                    onClick = { showBankingModeDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Bật chế độ ngân hàng") }
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Thu hồi quyền nút nổi nếu ngân hàng vẫn chặn") }
+                Text(
+                    "Sau khi chuyển khoản xong, cần bật lại Trợ năng và quyền nút nổi để tiếp tục chạy tool.",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
 
             SectionCard("Điều khiển") {
@@ -272,14 +311,50 @@ fun MainScreen(
             }
         }
     }
+
+    if (showBankingModeDialog) {
+        AlertDialog(
+            onDismissRequest = { showBankingModeDialog = false },
+            title = { Text("Bật chế độ ngân hàng?") },
+            text = {
+                Text(
+                    "Automation sẽ dừng, nút nổi biến mất và quyền Trợ năng của Auto Register Shift sẽ được tắt."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showBankingModeDialog = false
+                        AutomationController.enterBankingMode(context)
+                        Toast.makeText(
+                            context,
+                            "Đã tắt tool, nút nổi và Trợ năng. Bạn có thể mở ứng dụng ngân hàng.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                ) { Text("Tắt và tiếp tục") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showBankingModeDialog = false }) {
+                    Text("Hủy")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun StatusLine(label: String, value: String, positive: Boolean) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Text(label, modifier = Modifier.weight(0.3f))
         Text(
             value,
+            modifier = Modifier.weight(0.7f),
+            textAlign = TextAlign.End,
             color = if (positive) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
         )
     }

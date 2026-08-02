@@ -70,7 +70,10 @@ class AutomationForegroundService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_app)
             .setContentTitle("Auto Register Shift")
-            .setContentText("${state.message} • Làm mới ${state.refreshCount} • Thành công ${state.successCount}")
+            .setContentText(
+                "${state.message} • Làm mới ${state.refreshCount} • " +
+                    "Thành công ${state.successCount} • Đã đặt ${state.fullCount}"
+            )
             .setContentIntent(
                 PendingIntent.getActivity(
                     this,

@@ -11,9 +11,13 @@ object PreRefreshDecisionPolicy {
         loading: Boolean,
         detectedSlot: Boolean,
         visibleTimeRange: Boolean,
-        fallbackEnabled: Boolean
+        fallbackEnabled: Boolean,
+        allDetectedSlotsProcessed: Boolean = false,
+        forceRefresh: Boolean = false
     ): PreRefreshDecision = when {
         loading -> PreRefreshDecision.WAIT_FOR_CURRENT_LOADING
+        forceRefresh -> PreRefreshDecision.REFRESH
+        allDetectedSlotsProcessed -> PreRefreshDecision.REFRESH
         detectedSlot || (visibleTimeRange && fallbackEnabled) ->
             PreRefreshDecision.USE_VISIBLE_SLOT
         else -> PreRefreshDecision.REFRESH

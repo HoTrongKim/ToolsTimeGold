@@ -13,6 +13,7 @@ object DuplicateGuard {
         val latest = entries.filter { it.identifier == identifier }.maxByOrNull { it.timestampMs }
             ?: return false
         return latest.status == ShiftAttemptStatus.SUCCESS ||
+            latest.status == ShiftAttemptStatus.FULL ||
             nowMs - latest.timestampMs < cooldownMs
     }
 }

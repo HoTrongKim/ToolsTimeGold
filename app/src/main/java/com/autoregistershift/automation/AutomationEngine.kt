@@ -51,7 +51,9 @@ class AutomationEngine(
     private val refreshLimiter = RateLimiter(limit = { maxRefreshesPerMinute })
     private var refreshCount = 0
     private var successCount = 0
+    private var fullCount = 0
     private var unknownScreenCount = 0
+    private var forceRefreshBeforeNextSelection = false
     private var lastClickAt = 0L
     private val startedAt = System.currentTimeMillis()
 
@@ -174,7 +176,9 @@ class AutomationEngine(
                     loading = finder.hasLoading(slotRoot, settings.loadingTexts),
                     detectedSlot = selected != null,
                     visibleTimeRange = finder.hasTimeRange(slotRoot),
-                    fallbackEnabled = fallbackEnabled
+                    fallbackEnabled = fallbackEnabled,
+                    allDetectedSlotsProcessed = detected.isNotEmpty() && selected == null,
+                    forceRefresh = forceRefreshBeforeNextSelection
                 )) {
                     PreRefreshDecision.WAIT_FOR_CURRENT_LOADING -> {
                         waitForData(
@@ -193,6 +197,7 @@ class AutomationEngine(
                             continue
                         }
                         waitForData(service, contentSequenceBeforeRefresh)
+                        forceRefreshBeforeNextSelection = false
                     }
                 }
                 if (!canAct(service)) continue
@@ -207,6 +212,14 @@ class AutomationEngine(
                 detected = finder.detectShifts(slotRoot, height)
                 selected = detected.firstOrNull {
                     !history.shouldSkip(it.shift.identifier, settings.shiftCooldownMs)
+                }
+                if (detected.isNotEmpty() && selected == null) {
+                    transition(AutomationState.CHECKING_SLOTS, "Ca cũ đã xử lý • tiếp tục làm mới")
+                    logs.addRoutine(
+                        "Chỉ còn ca cũ đã thành công/đã được đặt hết • không click lại"
+                    )
+                    delay(refreshIntervalMs)
+                    continue
                 }
                 val selection = SlotSelectionPolicy.choose(
                     hasDetectedSlot = selected != null,
@@ -225,7 +238,9 @@ class AutomationEngine(
                 }
                 val shift = selected?.shift ?: fallbackShift(slotRoot)
                 if (history.shouldSkip(shift.identifier, settings.shiftCooldownMs)) {
-                    logs.addRoutine("Tool đang chạy • ca vừa xử lý đang trong cooldown")
+                    forceRefreshBeforeNextSelection = true
+                    transition(AutomationState.CHECKING_SLOTS, "Ca cũ đã xử lý • bắt buộc làm mới")
+                    logs.addRoutine("Ca tọa độ dự phòng là ca cũ • không click lại, tiếp tục làm mới")
                     delay(refreshIntervalMs)
                     continue
                 }
@@ -250,6 +265,8 @@ class AutomationEngine(
                 }
 
                 transition(AutomationState.REGISTERING, "Đang đăng ký")
+                service.clearRecentEventTexts(settings.targetPackage)
+                val registrationEventStartedAt = System.currentTimeMillis()
                 if (!clickRegisterButton(service, registerNode)) {
                     logs.add("Không thể bấm nút đăng ký", LogLevel.ERROR)
                     history.record(shift.identifier, ShiftAttemptStatus.ERROR)
@@ -257,11 +274,12 @@ class AutomationEngine(
                     continue
                 }
                 logs.add("Đã bấm đăng ký")
-                val result = awaitRegistrationResult(service)
+                val result = awaitRegistrationResult(service, registrationEventStartedAt)
                 when (result) {
                     RegistrationResult.SUCCESS -> {
                         successCount++
                         history.record(shift.identifier, ShiftAttemptStatus.SUCCESS)
+                        forceRefreshBeforeNextSelection = true
                         logs.add("Đăng ký thành công", LogLevel.SUCCESS)
                         notifySuccess()
                         transition(AutomationState.CHECKING_RESULT, "Đăng ký thành công")
@@ -284,18 +302,26 @@ class AutomationEngine(
                         }
                     }
                     RegistrationResult.FULL -> {
+                        fullCount++
                         history.record(shift.identifier, ShiftAttemptStatus.FULL)
-                        logs.add("Ca đã đầy")
-                        closeDialogIfConfigured(service)
+                        forceRefreshBeforeNextSelection = true
+                        logs.add("Ca đã được đặt hết • đánh dấu để không đăng ký lại")
+                        transition(
+                            AutomationState.CHECKING_RESULT,
+                            "Ca đã được đặt hết • quay lại làm mới"
+                        )
+                        delay(250)
                         returnToList(service)
                     }
                     RegistrationResult.NETWORK_ERROR -> {
                         history.record(shift.identifier, ShiftAttemptStatus.ERROR)
+                        forceRefreshBeforeNextSelection = true
                         logs.add("Lỗi mạng sau khi đã hết số lần thử lại", LogLevel.ERROR)
                         returnToList(service)
                     }
                     RegistrationResult.UNKNOWN -> {
                         history.record(shift.identifier, ShiftAttemptStatus.ERROR)
+                        forceRefreshBeforeNextSelection = true
                         logs.add("Không xác định được kết quả đăng ký", LogLevel.ERROR)
                         returnToList(service)
                     }
@@ -468,7 +494,8 @@ class AutomationEngine(
     }
 
     private suspend fun awaitRegistrationResult(
-        service: AutoRegisterAccessibilityService
+        service: AutoRegisterAccessibilityService,
+        registrationEventStartedAt: Long
     ): RegistrationResult {
         transition(AutomationState.CHECKING_RESULT, "Đang kiểm tra kết quả")
         val networkRetry = RetryPolicy(settings.maxRetry)
@@ -480,7 +507,11 @@ class AutomationEngine(
             waitWhilePaused()
             if (!canAct(service, allowNonSchedule = true)) return RegistrationResult.UNKNOWN
             val root = service.currentRoot()
-            when (val result = resultDetector.detect(root, settings)) {
+            val transientEventText = service.recentEventText(
+                settings.targetPackage,
+                registrationEventStartedAt
+            )
+            when (val result = resultDetector.detect(root, settings, transientEventText)) {
                 RegistrationResult.NETWORK_ERROR -> {
                     if (!networkRetry.recordRetry()) return result
                     logs.add(
@@ -619,11 +650,6 @@ class AutomationEngine(
         return false
     }
 
-    private suspend fun closeDialogIfConfigured(service: AutoRegisterAccessibilityService) {
-        val close = point("close_dialog") ?: return
-        if (close.enabled) safeClickRatio(service, close)
-    }
-
     private suspend fun safeClickNode(
         service: AutoRegisterAccessibilityService,
         node: android.view.accessibility.AccessibilityNodeInfo
@@ -760,7 +786,8 @@ class AutomationEngine(
                 enteredAtMs = stateMachine.enteredAtMs,
                 message = message ?: previous,
                 refreshCount = refreshCount,
-                successCount = successCount
+                successCount = successCount,
+                fullCount = fullCount
             )
         )
     }

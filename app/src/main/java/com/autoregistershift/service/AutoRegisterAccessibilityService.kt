@@ -19,6 +19,7 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
     private val connected = AtomicBoolean(false)
     private val contentSequences = ConcurrentHashMap<String, AtomicLong>()
     private val lastContentEventAt = ConcurrentHashMap<String, Long>()
+    private val recentTextEvents = ConcurrentHashMap<String, ArrayDeque<TimedAccessibilityText>>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -33,6 +34,13 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
         if (type !in monitoredEvents) return
         val now = System.currentTimeMillis()
         val eventPackage = event.packageName?.toString().orEmpty()
+        val eventText = buildList {
+            event.text.mapNotNullTo(this) { it?.toString()?.trim()?.takeIf(String::isNotBlank) }
+            event.contentDescription?.toString()?.trim()?.takeIf(String::isNotBlank)?.let(::add)
+        }.distinct().joinToString(" ")
+        if (eventPackage.isNotBlank() && eventText.isNotBlank()) {
+            recordEventText(eventPackage, eventText, now)
+        }
         if (eventPackage.isNotBlank() && type in contentChangeEvents) {
             contentSequences.computeIfAbsent(eventPackage) { AtomicLong() }.incrementAndGet()
             lastContentEventAt[eventPackage] = now
@@ -67,6 +75,27 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
     fun lastContentEventAtMs(packageName: String): Long =
         lastContentEventAt[packageName] ?: 0L
 
+    fun recentEventText(packageName: String, sinceMs: Long): String {
+        val queue = recentTextEvents[packageName] ?: return ""
+        val now = System.currentTimeMillis()
+        return synchronized(queue) {
+            while (queue.isNotEmpty() && now - queue.first().timestampMs > EVENT_TEXT_RETENTION_MS) {
+                queue.removeFirst()
+            }
+            queue.asSequence()
+                .filter { it.timestampMs >= sinceMs }
+                .joinToString(" ") { it.text }
+        }
+    }
+
+    fun clearRecentEventTexts(packageName: String) {
+        recentTextEvents.remove(packageName)
+    }
+
+    fun disableForBankingMode() {
+        disableSelf()
+    }
+
     suspend fun clickRatio(xRatio: Float, yRatio: Float, requiredPackage: String): Boolean {
         if (requiredPackage.isBlank() || currentPackage() != requiredPackage) return false
         val (width, height) = displaySize()
@@ -78,16 +107,30 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
 
     suspend fun <T> withGestureLock(block: suspend () -> T): T = gestureMutex.withLock { block() }
 
+    private fun recordEventText(packageName: String, text: String, timestampMs: Long) {
+        val queue = recentTextEvents.computeIfAbsent(packageName) { ArrayDeque() }
+        synchronized(queue) {
+            queue.addLast(TimedAccessibilityText(timestampMs, text.take(MAX_EVENT_TEXT_LENGTH)))
+            while (queue.size > MAX_EVENT_TEXT_EVENTS) queue.removeFirst()
+        }
+    }
+
+    private data class TimedAccessibilityText(val timestampMs: Long, val text: String)
+
     companion object {
         @Volatile
         var instance: AutoRegisterAccessibilityService? = null
             private set
 
         private const val EVENT_DEBOUNCE_MS = 150L
+        private const val EVENT_TEXT_RETENTION_MS = 15_000L
+        private const val MAX_EVENT_TEXT_EVENTS = 24
+        private const val MAX_EVENT_TEXT_LENGTH = 500
         private val monitoredEvents = setOf(
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_SCROLLED
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
         )
         private val contentChangeEvents = setOf(
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,

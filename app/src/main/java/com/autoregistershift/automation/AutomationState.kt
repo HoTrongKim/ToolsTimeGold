@@ -23,5 +23,6 @@ data class StateSnapshot(
     val enteredAtMs: Long = System.currentTimeMillis(),
     val message: String = "Đã dừng",
     val refreshCount: Int = 0,
-    val successCount: Int = 0
+    val successCount: Int = 0,
+    val fullCount: Int = 0
 )

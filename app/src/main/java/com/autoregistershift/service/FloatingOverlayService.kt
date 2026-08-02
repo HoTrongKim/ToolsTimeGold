@@ -44,7 +44,7 @@ class FloatingOverlayService : Service() {
     private lateinit var statusDot: TextView
     private lateinit var refreshMetric: TextView
     private lateinit var successMetric: TextView
-    private lateinit var speedMetric: TextView
+    private lateinit var fullMetric: TextView
     private lateinit var continuousButton: TextView
     private lateinit var compactSummary: TextView
 
@@ -165,10 +165,10 @@ class FloatingOverlayService : Service() {
         successMetric = metric("0", "THÀNH CÔNG")
         val selectedPreset = RefreshSpeedPreset.entries.firstOrNull { it.matches(appSettings) }
             ?: RefreshSpeedPreset.BALANCED
-        speedMetric = metric(selectedPreset.buttonLabel, "TỐC ĐỘ")
+        fullMetric = metric("0", "CA ĐÃ ĐẶT")
         metrics.addView(refreshMetric, weightedMetricParams())
         metrics.addView(successMetric, weightedMetricParams(dp(5)))
-        metrics.addView(speedMetric, weightedMetricParams())
+        metrics.addView(fullMetric, weightedMetricParams(dp(5)))
 
         continuousButton = actionButton("24/7  •  ĐANG BẬT", Color.rgb(18, 104, 73)) {
             AutomationController.setContinuousMode(!currentSettings.continuousMode)
@@ -193,7 +193,6 @@ class FloatingOverlayService : Service() {
             RefreshSpeedPreset.entries.forEach { preset ->
                 addView(actionButton(preset.label, Color.rgb(31, 43, 66)) {
                     AutomationController.setRefreshSpeed(preset)
-                    speedMetric.text = "${preset.buttonLabel}\nTỐC ĐỘ"
                     speedButton.text = "Tốc độ  •  ${preset.label}   ▾"
                     speedOptions.visibility = View.GONE
                     panel.post { updateAndClamp(panel) }
@@ -232,6 +231,12 @@ class FloatingOverlayService : Service() {
                 )
             }, weightedButtonParams(dp(5)))
         }
+        val bankingModeButton = actionButton(
+            "Chế độ ngân hàng  •  Tắt toàn bộ tool",
+            Color.rgb(78, 57, 112)
+        ) {
+            AutomationController.enterBankingMode(applicationContext)
+        }
 
         expandedContent.addView(statusCard)
         expandedContent.addView(metrics)
@@ -239,6 +244,7 @@ class FloatingOverlayService : Service() {
         expandedContent.addView(speedSection)
         expandedContent.addView(primaryActions)
         expandedContent.addView(utilities)
+        expandedContent.addView(bankingModeButton, fullWidthParams(dp(43), topMargin = dp(7)))
         panel.addView(header)
         panel.addView(expandedContent)
 
@@ -285,11 +291,19 @@ class FloatingOverlayService : Service() {
         if (!::statusText.isInitialized) return
         currentSnapshot = snapshot
         statusText.text = snapshot.message
-        stateText.text = stateLabel(snapshot.state)
+        val isFullResult = snapshot.message.contains("được đặt hết", ignoreCase = true) ||
+            snapshot.message.contains("ca cũ", ignoreCase = true)
+        stateText.text = when {
+            isFullResult -> "BỎ QUA CA CŨ • BẮT BUỘC LÀM MỚI"
+            snapshot.message.contains("thành công", ignoreCase = true) -> "ĐĂNG KÝ THÀNH CÔNG"
+            else -> stateLabel(snapshot.state)
+        }
         refreshMetric.text = "${snapshot.refreshCount}\nLÀM MỚI"
         successMetric.text = "${snapshot.successCount}\nTHÀNH CÔNG"
-        compactSummary.text = "AUTO  •  ↻ ${snapshot.refreshCount}   ✓ ${snapshot.successCount}"
-        statusDot.setTextColor(stateColor(snapshot.state))
+        fullMetric.text = "${snapshot.fullCount}\nCA ĐÃ ĐẶT"
+        compactSummary.text =
+            "AUTO  ↻${snapshot.refreshCount}  ✓${snapshot.successCount}  ⊘${snapshot.fullCount}"
+        statusDot.setTextColor(if (isFullResult) ACCENT_AMBER else stateColor(snapshot.state))
     }
 
     private fun renderContinuousMode(enabled: Boolean) {

@@ -114,6 +114,34 @@ class ScreenAnalyzerTest {
     }
 
     @Test
+    fun processedVisibleSlotForcesRefreshInsteadOfCoordinateFallback() {
+        assertEquals(
+            PreRefreshDecision.REFRESH,
+            PreRefreshDecisionPolicy.choose(
+                loading = false,
+                detectedSlot = false,
+                visibleTimeRange = true,
+                fallbackEnabled = true,
+                allDetectedSlotsProcessed = true
+            )
+        )
+    }
+
+    @Test
+    fun completedRegistrationForcesOneRefreshBeforeSelectingAnotherVisibleSlot() {
+        assertEquals(
+            PreRefreshDecision.REFRESH,
+            PreRefreshDecisionPolicy.choose(
+                loading = false,
+                detectedSlot = true,
+                visibleTimeRange = true,
+                fallbackEnabled = true,
+                forceRefresh = true
+            )
+        )
+    }
+
+    @Test
     fun registerButton() {
         assertTrue(analyze(node("Chi tiết", children = listOf(node("Đăng ký giờ làm", true)))).hasRegisterButton)
     }
@@ -146,6 +174,17 @@ class ScreenAnalyzerTest {
     @Test
     fun fullShift() {
         assertTrue(analyze(node("Ca đã đầy")).full)
+    }
+
+    @Test
+    fun fullShiftToastTextIsDetectedOutsideTheNodeTree() {
+        assertEquals(
+            RegistrationResult.FULL,
+            RegistrationResultDetector().detectText(
+                "Các khung giờ đã được đặt hết.",
+                settings
+            )
+        )
     }
 
     @Test

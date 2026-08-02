@@ -35,11 +35,13 @@ class CoreUtilityTest {
     fun duplicateGuardHonorsCooldownAndPermanentSuccess() {
         val entries = listOf(
             ShiftHistoryEntry("A", ShiftAttemptStatus.ERROR, 10_000),
-            ShiftHistoryEntry("B", ShiftAttemptStatus.SUCCESS, 1_000)
+            ShiftHistoryEntry("B", ShiftAttemptStatus.SUCCESS, 1_000),
+            ShiftHistoryEntry("FULL", ShiftAttemptStatus.FULL, 1_000)
         )
         assertTrue(DuplicateGuard.shouldSkip(entries, "A", 30_000, 20_000))
         assertFalse(DuplicateGuard.shouldSkip(entries, "A", 30_000, 50_001))
         assertTrue(DuplicateGuard.shouldSkip(entries, "B", 30_000, 99_999))
+        assertTrue(DuplicateGuard.shouldSkip(entries, "FULL", 30_000, 99_999))
         assertFalse(DuplicateGuard.shouldSkip(entries, "C", 30_000, 20_000))
     }
 
