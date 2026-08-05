@@ -6,8 +6,8 @@ package com.autoregistershift.automation
  */
 class RefreshContentSettlePolicy(
     private val minimumWaitMs: Long,
-    private val priorityContentWaitMs: Long = 120,
-    private val quietPeriodMs: Long = 80
+    private val priorityContentWaitMs: Long = 30,
+    private val quietPeriodMs: Long = 20
 ) {
     fun isReady(
         elapsedMs: Long,
@@ -18,9 +18,8 @@ class RefreshContentSettlePolicy(
     ): Boolean {
         if (loading) return false
         if (priorityContentVisible &&
-            contentChanged &&
             elapsedMs >= priorityContentWaitMs.coerceAtMost(minimumWaitMs) &&
-            quietForMs >= quietPeriodMs
+            (!contentChanged || quietForMs >= quietPeriodMs)
         ) {
             return true
         }

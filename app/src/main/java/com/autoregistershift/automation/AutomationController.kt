@@ -1,5 +1,6 @@
 package com.autoregistershift.automation
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
@@ -8,7 +9,6 @@ import com.autoregistershift.data.AutomationSessionStore
 import com.autoregistershift.data.SettingsRepository
 import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.LogLevel
-import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.service.AutomationForegroundService
 import com.autoregistershift.service.AutoRegisterAccessibilityService
 import com.autoregistershift.service.FloatingOverlayService
@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
+@SuppressLint("StaticFieldLeak")
 object AutomationController {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val commandMutex = Mutex()
@@ -102,15 +103,6 @@ object AutomationController {
     fun pause() {
         appContext?.let { AutomationSessionStore(it).markPaused() }
         engine?.pause()
-    }
-
-    fun setRefreshSpeed(preset: RefreshSpeedPreset) {
-        engine?.updateRefreshSpeed(preset)
-        val app = appContext ?: return
-        scope.launch {
-            SettingsRepository(app).update { preset.applyTo(it) }
-            LogRepository(app).add("Đã đổi tốc độ: ${preset.label}")
-        }
     }
 
     fun setContinuousMode(enabled: Boolean) {

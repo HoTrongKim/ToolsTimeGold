@@ -21,11 +21,14 @@
 - Máy trạng thái hữu hạn, timeout, debounce click, giới hạn click/refresh mỗi phút.
 - Cooldown và lịch sử trạng thái ca để tránh click trùng.
 - Foreground service với notification Pause/Stop.
-- Nút nổi Start/Pause/Stop, trạng thái và bộ đếm.
+- Dashboard chính hiển thị tốc độ 500 ms, trạng thái chạy và ba bộ đếm ngay đầu màn hình.
+- Nút nổi kéo thả được: dạng thu gọn có Stop nhanh; dạng mở rộng có Start/Pause/Stop, 24/7, mở app, nhật ký, trạng thái và bộ đếm.
 - Overlay kéo dấu `⊕` để lưu tọa độ theo tỉ lệ màn hình.
 - Nhật ký cục bộ: lọc, sao chép, xóa và xuất TXT.
 - Dừng click khi màn hình tắt/khóa, đổi ứng dụng, sai màn hình hoặc mất Accessibility.
 - Chế độ ngân hàng dừng automation, foreground service, nút nổi và tự tắt Accessibility của ứng dụng.
+- Làm mới cố định mỗi 0,5 giây (vuốt 120 ms, chờ ổn định tối thiểu 100 ms); Accessibility event đánh thức engine ngay khi ca mới xuất hiện.
+- Đường phản ứng nhanh: debounce sự kiện 30 ms, ổn định nội dung ưu tiên 30 ms và click debounce 60 ms.
 
 ## Cấu trúc
 
@@ -68,15 +71,15 @@ APK đầu ra:
 
 - Debug: `app/build/outputs/apk/debug/app-debug.apk`
 - Release cài thử: `app/build/outputs/apk/release/app-release.apk`
-- Bản phân phối đã đổi tên: `dist/AutoRegisterShift-v1.1.0.apk`
+- Bản phân phối đã đổi tên: `dist/AutoRegisterShift-v1.3.0.apk`
 
 Bản `release` của dự án mẫu đang ký bằng debug keystore để có thể cài kiểm thử và tạo đúng file `app-release.apk`. Trước khi phân phối, hãy tạo keystore riêng trong Android Studio (**Build > Generate Signed Bundle / APK**) và thay `signingConfig` trong `app/build.gradle.kts`. Không commit keystore hoặc mật khẩu.
 
 ### Cài APK đã tải về
 
-1. Tải file `AutoRegisterShift-v1.1.0.apk` bằng trình duyệt hoặc mở file trong ứng dụng **Tệp của bạn**.
+1. Tải file `AutoRegisterShift-v1.3.0.apk` bằng trình duyệt hoặc mở file trong ứng dụng **Tệp của bạn**.
 2. Nếu Android hỏi, mở **Cài đặt > Cài ứng dụng không xác định** và chỉ cho phép trình duyệt/ứng dụng Tệp đang dùng cài APK.
-3. Nhấn **Cài đặt**. Bản 1.1.0 có `versionCode = 2` và cùng chữ ký với bản release kiểm thử trước nên có thể cài đè mà không mất cấu hình.
+3. Nhấn **Cài đặt**. Bản 1.3.0 có `versionCode = 6` và cùng chữ ký với bản release kiểm thử trước nên có thể cài đè mà không mất cấu hình.
 4. Nếu báo **Ứng dụng chưa được cài đặt**, hãy gỡ bản có chữ ký khác (thường là bản do nguồn khác build), rồi cài lại APK này. Việc gỡ ứng dụng sẽ xóa cấu hình cục bộ, nên chỉ làm khi thật sự có lỗi chữ ký.
 
 Android luôn yêu cầu người dùng xác nhận cài APK và có thể yêu cầu bật **Cài ứng dụng không xác định**. Ứng dụng không thể và không được phép tự bỏ qua bước bảo vệ này.
@@ -95,7 +98,7 @@ Android luôn yêu cầu người dùng xác nhận cài APK và có thể yêu 
 
 Trước khi mở ứng dụng ngân hàng:
 
-1. Trên nút nổi, nhấn **Chế độ ngân hàng • Tắt toàn bộ tool**; hoặc mở Auto Register Shift, vào **An toàn khi chuyển khoản** và nhấn **Bật chế độ ngân hàng**.
+1. Trên nút nổi, nhấn **Ngân hàng • Tắt tool và Trợ năng**; hoặc mở Auto Register Shift, vào **An toàn khi chuyển khoản** và nhấn **Tắt tool và vào chế độ ngân hàng**.
 2. Xác nhận. Ứng dụng sẽ hủy job tự động hóa, dừng foreground service, gỡ nút nổi và tự tắt Accessibility của Auto Register Shift.
 3. Nếu ngân hàng vẫn chặn, nhấn **Thu hồi quyền nút nổi nếu ngân hàng vẫn chặn**, rồi tắt **Cho phép hiển thị trên ứng dụng khác**. Một số ngân hàng kiểm tra cả quyền overlay đã được cấp dù không còn lớp phủ đang chạy.
 4. Tắt Accessibility/lớp phủ của các ứng dụng auto-click khác nếu chúng vẫn đang bật. Auto Register Shift chỉ có thể tự tắt dịch vụ của chính nó.

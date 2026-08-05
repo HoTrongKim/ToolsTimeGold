@@ -14,7 +14,6 @@ import com.autoregistershift.data.ShiftHistoryRepository
 import com.autoregistershift.model.AppSettings
 import com.autoregistershift.model.CoordinatePoint
 import com.autoregistershift.model.LogLevel
-import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.model.ShiftAttemptStatus
 import com.autoregistershift.model.ShiftInfo
 import com.autoregistershift.service.AutoRegisterAccessibilityService
@@ -27,6 +26,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AutomationEngine(
     private val context: Context,
@@ -41,11 +42,11 @@ class AutomationEngine(
     private val stateMachine = StateMachine()
     private val finder = NodeFinder()
     private val resultDetector = RegistrationResultDetector(finder)
-    @Volatile private var refreshIntervalMs = settings.refreshIntervalMs
-    @Volatile private var waitAfterSwipeMs = settings.waitAfterSwipeMs
-    @Volatile private var maxRefreshesPerMinute = settings.maxRefreshesPerMinute
-    @Volatile private var clickDebounceMs = settings.clickDebounceMs
-    @Volatile private var refreshSwipeDurationMs = settings.refreshSwipeDurationMs
+    private val refreshIntervalMs = FIXED_REFRESH_INTERVAL_MS
+    private val waitAfterSwipeMs = settings.waitAfterSwipeMs
+    private val maxRefreshesPerMinute = settings.maxRefreshesPerMinute
+    private val clickDebounceMs = settings.clickDebounceMs
+    private val refreshSwipeDurationMs = settings.refreshSwipeDurationMs
     @Volatile private var continuousMode = settings.continuousMode
     private val clickLimiter = RateLimiter(limit = { settings.maxClicksPerMinute })
     private val refreshLimiter = RateLimiter(limit = { maxRefreshesPerMinute })
@@ -55,17 +56,10 @@ class AutomationEngine(
     private var unknownScreenCount = 0
     private var forceRefreshBeforeNextSelection = false
     private var lastClickAt = 0L
+    private var lastRefreshStartedAtMs = 0L
     private val startedAt = System.currentTimeMillis()
 
     val isPaused: Boolean get() = paused.get()
-
-    fun updateRefreshSpeed(preset: RefreshSpeedPreset) {
-        refreshIntervalMs = preset.refreshIntervalMs
-        waitAfterSwipeMs = preset.waitAfterSwipeMs
-        maxRefreshesPerMinute = preset.maxRefreshesPerMinute
-        clickDebounceMs = preset.clickDebounceMs
-        refreshSwipeDurationMs = preset.refreshSwipeDurationMs
-    }
 
     fun updateContinuousMode(enabled: Boolean) {
         continuousMode = enabled
@@ -193,7 +187,7 @@ class AutomationEngine(
                         val contentSequenceBeforeRefresh =
                             service.contentChangeSequence(settings.targetPackage)
                         if (!refresh(service)) {
-                            delay(refreshIntervalMs)
+                            waitForRefreshWindow(service, reactToVisibleSlot = false)
                             continue
                         }
                         waitForData(service, contentSequenceBeforeRefresh)
@@ -206,7 +200,7 @@ class AutomationEngine(
                 slotRoot = service.currentRoot()
                 if (finder.hasLoading(slotRoot, settings.loadingTexts)) {
                     logs.addRoutine("Tool đang chạy • danh sách đang tải")
-                    delay(refreshIntervalMs)
+                    waitForRefreshWindow(service, reactToVisibleSlot = true)
                     continue
                 }
                 detected = finder.detectShifts(slotRoot, height)
@@ -218,7 +212,7 @@ class AutomationEngine(
                     logs.addRoutine(
                         "Chỉ còn ca cũ đã thành công/đã được đặt hết • không click lại"
                     )
-                    delay(refreshIntervalMs)
+                    waitForRefreshWindow(service, reactToVisibleSlot = false)
                     continue
                 }
                 val selection = SlotSelectionPolicy.choose(
@@ -233,7 +227,7 @@ class AutomationEngine(
                         "Chưa phát hiện thẻ ca; tiếp tục làm mới"
                     }
                     logs.addRoutine("Tool đang chạy ổn định • $message • đã làm mới $refreshCount lần")
-                    delay(refreshIntervalMs)
+                    waitForRefreshWindow(service, reactToVisibleSlot = true)
                     continue
                 }
                 val shift = selected?.shift ?: fallbackShift(slotRoot)
@@ -241,7 +235,7 @@ class AutomationEngine(
                     forceRefreshBeforeNextSelection = true
                     transition(AutomationState.CHECKING_SLOTS, "Ca cũ đã xử lý • bắt buộc làm mới")
                     logs.addRoutine("Ca tọa độ dự phòng là ca cũ • không click lại, tiếp tục làm mới")
-                    delay(refreshIntervalMs)
+                    waitForRefreshWindow(service, reactToVisibleSlot = false)
                     continue
                 }
                 logs.add("Phát hiện ca ${shift.startTime}–${shift.endTime}")
@@ -326,7 +320,7 @@ class AutomationEngine(
                         returnToList(service)
                     }
                 }
-                delay(refreshIntervalMs)
+                waitForRefreshWindow(service, reactToVisibleSlot = false)
             }
     }
 
@@ -352,13 +346,14 @@ class AutomationEngine(
         transition(AutomationState.REFRESHING, "Đang làm mới")
         if (!refreshLimiter.tryAcquire()) {
             logs.addRoutine("Tool đang chạy • đã đạt giới hạn làm mới an toàn mỗi phút")
-            delay(3_000)
+            delay(FIXED_REFRESH_INTERVAL_MS)
             return false
         }
         val start = point("refresh_start") ?: return false
         val end = point("refresh_end") ?: return false
         if (!start.enabled || !end.enabled || !canAct(service)) return false
         val (width, height) = service.displaySize()
+        lastRefreshStartedAtMs = System.currentTimeMillis()
         val ok = GestureController(service).swipe(
             CoordinateConverter.toReal(start.xRatio, width).toFloat(),
             CoordinateConverter.toReal(start.yRatio, height).toFloat(),
@@ -406,7 +401,61 @@ class AutomationEngine(
             ) {
                 return
             }
-            delay(40)
+            delay(15)
+        }
+    }
+
+    /**
+     * Giữ nhịp vuốt 500 ms nhưng không ngủ mù. Nếu Accessibility báo giao diện
+     * mục tiêu vừa thay đổi và một ca chưa xử lý xuất hiện, vòng chờ kết thúc ngay.
+     */
+    private suspend fun waitForRefreshWindow(
+        service: AutoRegisterAccessibilityService,
+        reactToVisibleSlot: Boolean
+    ) {
+        val now = System.currentTimeMillis()
+        val remainingWaitMs = RefreshCadencePolicy.remainingWaitMs(
+            nowMs = now,
+            lastRefreshStartedAtMs = lastRefreshStartedAtMs,
+            intervalMs = refreshIntervalMs
+        )
+        if (remainingWaitMs <= 0) return
+        val deadline = now + remainingWaitMs
+        while (stopToken.isActive) {
+            waitWhilePaused()
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) return
+            val targetEvent = withTimeoutOrNull(remaining) {
+                AutomationController.uiEvents.first { it == settings.targetPackage }
+            } ?: return
+            if (!reactToVisibleSlot || targetEvent != settings.targetPackage ||
+                service.currentPackage() != settings.targetPackage || !deviceReady()
+            ) {
+                continue
+            }
+
+            val root = service.currentRoot()
+            if (!isScheduleScreen(root) || finder.hasLoading(root, settings.loadingTexts)) continue
+            val (_, screenHeight) = service.displaySize()
+            var availableSlot = false
+            for (detected in finder.detectShifts(root, screenHeight)) {
+                if (!history.shouldSkip(detected.shift.identifier, settings.shiftCooldownMs)) {
+                    availableSlot = true
+                    break
+                }
+            }
+            if (RefreshWakePolicy.shouldWake(
+                    contentEventForTarget = true,
+                    targetAppActive = true,
+                    scheduleScreen = true,
+                    loading = false,
+                    unprocessedSlotVisible = availableSlot
+                )
+            ) {
+                transition(AutomationState.CHECKING_SLOTS, "Phát hiện ca • phản ứng ngay")
+                logs.add("Accessibility báo có ca mới • bỏ qua thời gian chờ làm mới")
+                return
+            }
         }
     }
 
@@ -438,7 +487,7 @@ class AutomationEngine(
             waitWhilePaused()
             if (!canAct(service, allowNonSchedule = true)) return false
             if (isDetail(service)) return true
-            delay(50)
+            delay(15)
         }
         return isDetail(service)
     }
@@ -462,7 +511,7 @@ class AutomationEngine(
             val started = System.currentTimeMillis()
             while (stopToken.isActive && System.currentTimeMillis() - started < 600) {
                 finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)?.let { return it }
-                delay(50)
+                delay(15)
             }
         }
         return finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)
@@ -518,7 +567,7 @@ class AutomationEngine(
                         "Lỗi mạng, thử lại ${networkRetry.retryCount}/${settings.maxRetry}",
                         LogLevel.ERROR
                     )
-                    delay(refreshIntervalMs)
+                    delay(REGISTRATION_NETWORK_RETRY_MS)
                     val button = finder.findByTexts(service.currentRoot(), settings.registerButtonTexts)
                     if (button != null && isDetail(service)) {
                         retryRegisterButton(service)
@@ -569,7 +618,7 @@ class AutomationEngine(
                         lastPublishedSecond = elapsedSecond
                         publish("Đang chờ phản hồi • ${elapsedSecond + 1}s")
                     }
-                    delay(80)
+                    delay(25)
                 }
                 else -> return result
             }
@@ -813,6 +862,8 @@ class AutomationEngine(
     }
 
     companion object {
+        private const val FIXED_REFRESH_INTERVAL_MS = 500L
+        private const val REGISTRATION_NETWORK_RETRY_MS = 350L
         private const val MAX_RETURN_ATTEMPTS = 3
         private const val RETURN_CONFIRM_TIMEOUT_MS = 1_100L
     }

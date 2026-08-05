@@ -109,12 +109,12 @@ fun SettingsScreen(onBack: () -> Unit) {
             }
 
             SectionCard("Thời gian (mili giây)") {
-                LongEditor("Khoảng nghỉ giữa lần làm mới", draft.refreshIntervalMs) {
-                    draft = draft.copy(refreshIntervalMs = it)
-                }
-                LongEditor("Chờ sau khi vuốt", draft.waitAfterSwipeMs) {
-                    draft = draft.copy(waitAfterSwipeMs = it)
-                }
+                Text(
+                    "Làm mới cố định: 500 ms • khi thấy ca sẽ phản ứng ngay",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text("Chờ ổn định sau vuốt: 100 ms (cố định)")
                 LongEditor("Chờ sau khi mở ca", draft.waitAfterOpenSlotMs) {
                     draft = draft.copy(waitAfterOpenSlotMs = it)
                 }
@@ -127,9 +127,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 LongEditor("Cooldown cùng một ca", draft.shiftCooldownMs) {
                     draft = draft.copy(shiftCooldownMs = it)
                 }
-                LongEditor("Thời gian vuốt làm mới", draft.refreshSwipeDurationMs) {
-                    draft = draft.copy(refreshSwipeDurationMs = it.coerceIn(250, 700))
-                }
+                Text("Thời gian vuốt làm mới: 120 ms (cố định)")
                 LongEditor("Thời gian vuốt tải thêm", draft.loadSwipeDurationMs) {
                     draft = draft.copy(loadSwipeDurationMs = it.coerceIn(350, 600))
                 }
@@ -148,9 +146,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 IntEditor("Số click tối đa mỗi phút", draft.maxClicksPerMinute) {
                     draft = draft.copy(maxClicksPerMinute = it)
                 }
-                IntEditor("Số refresh tối đa mỗi phút", draft.maxRefreshesPerMinute) {
-                    draft = draft.copy(maxRefreshesPerMinute = it)
-                }
+                Text("Số refresh tối đa mỗi phút: 120 (cố định)")
                 IntEditor("Số lần giao diện không xác định", draft.maxUnknownScreens) {
                     draft = draft.copy(maxUnknownScreens = it)
                 }
@@ -266,16 +262,17 @@ private fun PackagePicker(onDismiss: () -> Unit, onSelected: (String) -> Unit) {
 }
 
 private fun AppSettings.sanitized() = copy(
-    refreshIntervalMs = refreshIntervalMs.coerceAtLeast(500),
-    waitAfterSwipeMs = waitAfterSwipeMs.coerceAtLeast(200),
+    refreshIntervalMs = 500,
+    waitAfterSwipeMs = 100,
     waitAfterOpenSlotMs = waitAfterOpenSlotMs.coerceAtLeast(200),
     registrationTimeoutMs = registrationTimeoutMs.coerceAtLeast(1_000),
     maxRetry = maxRetry.coerceIn(0, 10),
-    clickDebounceMs = clickDebounceMs.coerceAtLeast(100),
+    clickDebounceMs = clickDebounceMs.coerceAtLeast(60),
     shiftCooldownMs = shiftCooldownMs.coerceAtLeast(1_000),
     maxRegistrations = maxRegistrations.coerceAtLeast(1),
     maxRunMinutes = maxRunMinutes.coerceAtLeast(1),
     maxClicksPerMinute = maxClicksPerMinute.coerceIn(1, 120),
-    maxRefreshesPerMinute = maxRefreshesPerMinute.coerceIn(1, 60),
+    maxRefreshesPerMinute = 120,
+    refreshSwipeDurationMs = 120,
     maxUnknownScreens = maxUnknownScreens.coerceIn(1, 20)
 )

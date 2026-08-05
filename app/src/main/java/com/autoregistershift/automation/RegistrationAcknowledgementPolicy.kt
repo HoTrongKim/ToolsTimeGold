@@ -10,8 +10,8 @@ package com.autoregistershift.automation
  */
 class RegistrationAcknowledgementPolicy(
     maximumRetries: Int,
-    private val firstRetryDelayMs: Long = 550,
-    private val nextRetryDelayMs: Long = 700
+    private val firstRetryDelayMs: Long = 350,
+    private val nextRetryDelayMs: Long = 450
 ) {
     val maximumRetries: Int = maximumRetries.coerceIn(0, MAX_ACKNOWLEDGEMENT_RETRIES)
 

@@ -100,20 +100,15 @@ class SettingsRepository(private val context: Context) {
                 ).distinct(),
             loadingTexts = this[Keys.loadingTexts].decodeList(defaults.loadingTexts),
             prohibitedTexts = this[Keys.prohibitedTexts].decodeList(defaults.prohibitedTexts),
-            refreshIntervalMs = when {
-                shouldMigrateFastPreset -> 1_000L
-                schemaVersion < 3 && storedRefresh == 3_000L -> 2_000L
-                else -> storedRefresh
-            },
-            waitAfterSwipeMs = when {
-                shouldMigrateFastPreset -> 300L
-                schemaVersion < 3 && storedWaitAfterSwipe == 1_500L -> 1_200L
-                else -> storedWaitAfterSwipe
-            },
+            // Nhịp 500 ms, gesture 120 ms và thời gian ổn định 100 ms được cố định
+            // để các lần vuốt không chồng nhau nhưng vẫn đạt yêu cầu làm mới rất nhanh.
+            refreshIntervalMs = 500L,
+            waitAfterSwipeMs = 100L,
             waitAfterOpenSlotMs = this[Keys.waitAfterOpen] ?: defaults.waitAfterOpenSlotMs,
             registrationTimeoutMs = this[Keys.resultTimeout] ?: defaults.registrationTimeoutMs,
             maxRetry = this[Keys.maxRetry] ?: defaults.maxRetry,
             clickDebounceMs = when {
+                schemaVersion < 10 -> 60L
                 wasPreviousFastPreset && storedClickDebounce == 150L -> 100L
                 wasExtremeFastPreset && storedClickDebounce == 100L -> 100L
                 schemaVersion < 4 && storedClickDebounce == 500L -> 200L
@@ -123,21 +118,9 @@ class SettingsRepository(private val context: Context) {
             maxRegistrations = this[Keys.maxRegistrations] ?: defaults.maxRegistrations,
             maxRunMinutes = this[Keys.maxRunMinutes] ?: defaults.maxRunMinutes,
             maxClicksPerMinute = this[Keys.maxClicks] ?: defaults.maxClicksPerMinute,
-            maxRefreshesPerMinute = when {
-                wasPreviousFastPreset && storedMaxRefreshes == 40 -> 35
-                wasExtremeFastPreset && storedMaxRefreshes == 60 -> 35
-                schemaVersion < 3 && storedMaxRefreshes == 20 -> 30
-                else -> storedMaxRefreshes
-            },
+            maxRefreshesPerMinute = 120,
             maxUnknownScreens = this[Keys.maxUnknown] ?: defaults.maxUnknownScreens,
-            refreshSwipeDurationMs = if (
-                (wasPreviousFastPreset && storedRefreshDuration == 550L) ||
-                    (wasExtremeFastPreset && storedRefreshDuration == 350L)
-            ) {
-                350L
-            } else {
-                storedRefreshDuration
-            },
+            refreshSwipeDurationMs = 120L,
             loadSwipeDurationMs = this[Keys.loadDuration] ?: defaults.loadSwipeDurationMs,
             registerAll = this[Keys.registerAll] ?: defaults.registerAll,
             stopAfterSuccess = this[Keys.stopAfterSuccess] ?: defaults.stopAfterSuccess,
@@ -220,6 +203,6 @@ class SettingsRepository(private val context: Context) {
     }
 
     companion object {
-        private const val CURRENT_SCHEMA_VERSION = 7
+        private const val CURRENT_SCHEMA_VERSION = 11
     }
 }

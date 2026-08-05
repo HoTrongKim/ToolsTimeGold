@@ -19,7 +19,7 @@ class GestureController(
 
     suspend fun click(x: Float, y: Float): Boolean = service.withGestureLock {
         val path = Path().apply { moveTo(x, y) }
-        dispatch(path, 1, 80)
+        dispatch(path, 1, 50)
     }
 
     suspend fun swipe(

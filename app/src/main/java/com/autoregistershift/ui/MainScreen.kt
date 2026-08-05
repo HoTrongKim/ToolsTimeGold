@@ -16,13 +16,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -42,10 +44,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.autoregistershift.BuildConfig
 import com.autoregistershift.automation.AutomationController
 import com.autoregistershift.automation.AutomationState
 import com.autoregistershift.data.SettingsRepository
-import com.autoregistershift.model.RefreshSpeedPreset
 import com.autoregistershift.ui.components.SectionCard
 import com.autoregistershift.ui.components.ToggleRow
 import com.autoregistershift.util.PackageUtils
@@ -83,6 +85,12 @@ fun MainScreen(
     val notificationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { permissionRefresh++ }
+    val toolActive = runtime.state !in setOf(
+        AutomationState.IDLE,
+        AutomationState.STOPPED,
+        AutomationState.ERROR
+    )
+    val permissionsReady = accessibilityEnabled && overlayEnabled && notificationsEnabled
 
     Scaffold { padding ->
         Column(
@@ -93,49 +101,115 @@ fun MainScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("Auto Register Shift", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Tự động hóa cục bộ bằng Trợ năng. Tool không vượt CAPTCHA, OTP hoặc bước xác minh.",
-                style = MaterialTheme.typography.bodyMedium
-            )
-
-            SectionCard("Trạng thái") {
-                StatusLine("Trợ năng", if (accessibilityEnabled) "Đã bật" else "Chưa bật", accessibilityEnabled)
-                StatusLine("Nút nổi", if (overlayEnabled) "Đã cấp quyền" else "Chưa cấp quyền", overlayEnabled)
-                StatusLine("Thông báo", if (notificationsEnabled) "Đã cấp quyền" else "Chưa cấp quyền", notificationsEnabled)
-                StatusLine(
-                    "Tool",
-                    runtime.message,
-                    runtime.message.startsWith("Chế độ ngân hàng") ||
-                        runtime.state !in setOf(AutomationState.ERROR, AutomationState.STOPPED)
-                )
-                Text(
-                    "Làm mới: ${runtime.refreshCount} • Thành công: ${runtime.successCount} • " +
-                        "Ca đã đặt: ${runtime.fullCount}"
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Auto Register Shift",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "v${BuildConfig.VERSION_NAME} • Xử lý hoàn toàn trên thiết bị",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = .64f)
+                    )
+                }
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        "⚡ 500 ms",
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
-            SectionCard("Quyền cần cấp") {
+            RuntimeDashboard(
+                message = runtime.message,
+                active = toolActive,
+                paused = runtime.state == AutomationState.PAUSED,
+                refreshCount = runtime.refreshCount,
+                successCount = runtime.successCount,
+                fullCount = runtime.fullCount
+            )
+
+            SectionCard("Điều khiển nhanh") {
                 Button(
                     onClick = {
-                        context.startActivity(
-                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
+                        when {
+                            !accessibilityEnabled -> Toast.makeText(
+                                context, "Hãy bật quyền Trợ năng trước", Toast.LENGTH_LONG
+                            ).show()
+                            settings.targetPackage.isBlank() -> Toast.makeText(
+                                context, "Hãy chọn ứng dụng mục tiêu", Toast.LENGTH_LONG
+                            ).show()
+                            else -> AutomationController.startOrResume(context)
+                        }
                     },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("Cấp quyền Trợ năng") }
-                OutlinedButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
+                ) { Text(if (runtime.state == AutomationState.PAUSED) "▶ Tiếp tục" else "▶ Bắt đầu") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = AutomationController::pause,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Ⅱ Tạm dừng") }
+                    OutlinedButton(
+                        onClick = AutomationController::stop,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("■ Dừng") }
+                }
+            }
+
+            SectionCard("Quyền truy cập") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    PermissionBadge("Trợ năng", accessibilityEnabled, Modifier.weight(1f))
+                    PermissionBadge("Nút nổi", overlayEnabled, Modifier.weight(1f))
+                    PermissionBadge("Thông báo", notificationsEnabled, Modifier.weight(1f))
+                }
+                Text(
+                    if (permissionsReady) "Thiết bị đã sẵn sàng để chạy tự động."
+                    else "Hãy cấp đủ các quyền còn thiếu trước khi bắt đầu.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (permissionsReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Cấp quyền nút nổi") }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Trợ năng") }
+                    OutlinedButton(
+                        onClick = {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                )
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Nút nổi") }
+                }
                 if (Build.VERSION.SDK_INT >= 33 && !notificationsEnabled) {
                     OutlinedButton(
                         onClick = { notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
@@ -144,60 +218,31 @@ fun MainScreen(
                 }
             }
 
-            SectionCard("An toàn khi chuyển khoản") {
-                Text(
-                    "Trước khi mở ứng dụng ngân hàng, hãy bật chế độ này. Tool sẽ dừng hoàn toàn, gỡ nút nổi và tự tắt dịch vụ Trợ năng để tránh ngân hàng chặn thao tác.",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Button(
-                    onClick = { showBankingModeDialog = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Bật chế độ ngân hàng") }
-                OutlinedButton(
-                    onClick = {
-                        context.startActivity(
-                            Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Thu hồi quyền nút nổi nếu ngân hàng vẫn chặn") }
-                Text(
-                    "Sau khi chuyển khoản xong, cần bật lại Trợ năng và quyền nút nổi để tiếp tục chạy tool.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
-            SectionCard("Điều khiển") {
+            SectionCard("Nhịp hoạt động") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Button(
-                        onClick = {
-                            when {
-                                !accessibilityEnabled -> Toast.makeText(
-                                    context, "Hãy bật quyền Trợ năng trước", Toast.LENGTH_LONG
-                                ).show()
-                                settings.targetPackage.isBlank() -> Toast.makeText(
-                                    context, "Hãy chọn ứng dụng mục tiêu", Toast.LENGTH_LONG
-                                ).show()
-                                else -> AutomationController.startOrResume(context)
-                            }
-                        },
+                    TimingPill(
+                        symbol = "↻",
+                        value = "0,5 giây",
+                        caption = "Làm mới",
                         modifier = Modifier.weight(1f)
-                    ) { Text("Bắt đầu") }
-                    OutlinedButton(
-                        onClick = AutomationController::pause,
+                    )
+                    TimingPill(
+                        symbol = "⚡",
+                        value = "Tức thì",
+                        caption = "Khi thấy ca",
                         modifier = Modifier.weight(1f)
-                    ) { Text("Tạm dừng") }
+                    )
                 }
-                Button(
-                    onClick = AutomationController::stop,
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Dừng hoàn toàn") }
+                Text(
+                    "Tool vuốt xuống mỗi 0,5 giây. Nếu Accessibility phát hiện ca trong lúc chờ, tool mở và đăng ký ngay mà không đợi hết chu kỳ.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            SectionCard("Cấu hình và nhật ký") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -234,44 +279,9 @@ fun MainScreen(
                         Text("Nhật ký")
                     }
                 }
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            repository.reset()
-                            Toast.makeText(context, "Đã khôi phục mặc định", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Khôi phục mặc định") }
             }
 
-            SectionCard("Tốc độ làm mới") {
-                Text(
-                    "Đổi tốc độ có hiệu lực ngay. Tool làm mới liên tục theo tốc độ đã chọn và không tự tạm nghỉ.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    RefreshSpeedPreset.entries.forEach { preset ->
-                        FilterChip(
-                            selected = preset.matches(settings),
-                            onClick = {
-                                AutomationController.setRefreshSpeed(preset)
-                            },
-                            label = { Text(preset.buttonLabel) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-                Text(
-                    "Hiện tại: ${settings.refreshIntervalMs} ms • Chờ tải: ${settings.waitAfterSwipeMs} ms",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
-            SectionCard("Tùy chọn nhanh") {
+            SectionCard("Chế độ vận hành") {
                 ToggleRow("Chạy liên tục 24/7 và tự phục hồi", settings.continuousMode) {
                     AutomationController.setContinuousMode(it)
                 }
@@ -309,6 +319,37 @@ fun MainScreen(
                     scope.launch { repository.update { value -> value.copy(keepScreenOn = it) } }
                 }
             }
+
+            SectionCard("An toàn khi chuyển khoản") {
+                Text(
+                    "Chế độ ngân hàng sẽ dừng tool, gỡ nút nổi và tắt dịch vụ Trợ năng trước khi bạn chuyển khoản.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Button(
+                    onClick = { showBankingModeDialog = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Tắt tool và vào chế độ ngân hàng") }
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}")
+                            )
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Quản lý quyền nút nổi") }
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            repository.reset()
+                            Toast.makeText(context, "Đã khôi phục mặc định", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Khôi phục toàn bộ cấu hình mặc định") }
+            }
         }
     }
 
@@ -340,6 +381,137 @@ fun MainScreen(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun RuntimeDashboard(
+    message: String,
+    active: Boolean,
+    paused: Boolean,
+    refreshCount: Int,
+    successCount: Int,
+    fullCount: Int
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Trạng thái vận hành", style = MaterialTheme.typography.titleMedium)
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = when {
+                        paused -> MaterialTheme.colorScheme.errorContainer
+                        active -> MaterialTheme.colorScheme.primary
+                        else -> MaterialTheme.colorScheme.surface
+                    }
+                ) {
+                    Text(
+                        when {
+                            paused -> "TẠM DỪNG"
+                            active -> "ĐANG CHẠY"
+                            else -> "ĐÃ DỪNG"
+                        },
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = if (active && !paused) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
+                    )
+                }
+            }
+            Text(message, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                DashboardMetric("↻", refreshCount.toString(), "Làm mới", Modifier.weight(1f))
+                DashboardMetric("✓", successCount.toString(), "Thành công", Modifier.weight(1f))
+                DashboardMetric("⊘", fullCount.toString(), "Đã đặt", Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardMetric(
+    symbol: String,
+    value: String,
+    caption: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = .72f)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("$symbol $value", fontWeight = FontWeight.Bold)
+            Text(caption, style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun PermissionBadge(label: String, granted: Boolean, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = if (granted) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        }
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 9.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(if (granted) "✓" else "!", fontWeight = FontWeight.Bold)
+            Text(label, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun TimingPill(
+    symbol: String,
+    value: String,
+    caption: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text("$symbol  $value", fontWeight = FontWeight.Bold)
+            Text(
+                caption,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .72f)
+            )
+        }
     }
 }
 

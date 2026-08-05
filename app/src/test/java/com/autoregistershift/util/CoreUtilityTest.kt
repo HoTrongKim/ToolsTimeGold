@@ -5,12 +5,13 @@ import com.autoregistershift.automation.ContinuousRunPolicy
 import com.autoregistershift.automation.DuplicateGuard
 import com.autoregistershift.automation.RegistrationAcknowledgementPolicy
 import com.autoregistershift.automation.RefreshContentSettlePolicy
+import com.autoregistershift.automation.RefreshCadencePolicy
+import com.autoregistershift.automation.RefreshWakePolicy
 import com.autoregistershift.automation.RetryPolicy
 import com.autoregistershift.model.ShiftAttemptStatus
 import com.autoregistershift.model.ShiftHistoryEntry
 import com.autoregistershift.model.CoordinatePoint
 import com.autoregistershift.model.AppSettings
-import com.autoregistershift.model.RefreshSpeedPreset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -57,24 +58,20 @@ class CoreUtilityTest {
 
     @Test
     fun registrationClickRetryWaitsForAcknowledgementAndNeverSpams() {
-        val retry = RegistrationAcknowledgementPolicy(
-            maximumRetries = 5,
-            firstRetryDelayMs = 550,
-            nextRetryDelayMs = 700
-        )
+        val retry = RegistrationAcknowledgementPolicy(maximumRetries = 5)
         retry.recordInitialClick(1_000)
 
         assertEquals(2, retry.maximumRetries)
-        assertFalse(retry.shouldRetry(1_549, registerButtonVisible = true, loading = false))
-        assertFalse(retry.shouldRetry(1_700, registerButtonVisible = true, loading = true))
-        assertFalse(retry.shouldRetry(1_700, registerButtonVisible = false, loading = false))
+        assertFalse(retry.shouldRetry(1_349, registerButtonVisible = true, loading = false))
+        assertFalse(retry.shouldRetry(1_400, registerButtonVisible = true, loading = true))
+        assertFalse(retry.shouldRetry(1_400, registerButtonVisible = false, loading = false))
 
-        assertTrue(retry.shouldRetry(1_550, registerButtonVisible = true, loading = false))
-        assertTrue(retry.recordRetry(1_550))
-        assertFalse(retry.shouldRetry(2_249, registerButtonVisible = true, loading = false))
+        assertTrue(retry.shouldRetry(1_350, registerButtonVisible = true, loading = false))
+        assertTrue(retry.recordRetry(1_350))
+        assertFalse(retry.shouldRetry(1_799, registerButtonVisible = true, loading = false))
 
-        assertTrue(retry.shouldRetry(2_250, registerButtonVisible = true, loading = false))
-        assertTrue(retry.recordRetry(2_250))
+        assertTrue(retry.shouldRetry(1_800, registerButtonVisible = true, loading = false))
+        assertTrue(retry.recordRetry(1_800))
         assertFalse(retry.shouldRetry(4_000, registerButtonVisible = true, loading = false))
         assertFalse(retry.recordRetry(4_000))
     }
@@ -123,14 +120,29 @@ class CoreUtilityTest {
     }
 
     @Test
-    fun fastRefreshPresetUsesFastestRateAllowedByTargetProtection() {
-        val fast = RefreshSpeedPreset.FAST.applyTo(AppSettings())
-        assertEquals(1_000L, fast.refreshIntervalMs)
-        assertEquals(300L, fast.waitAfterSwipeMs)
-        assertEquals(35, fast.maxRefreshesPerMinute)
-        assertEquals(100L, fast.clickDebounceMs)
-        assertEquals(350L, fast.refreshSwipeDurationMs)
-        assertTrue(RefreshSpeedPreset.FAST.matches(fast))
+    fun defaultTimingUsesHalfSecondRefreshAndFastSlotHandling() {
+        val timing = AppSettings()
+        assertEquals(500L, timing.refreshIntervalMs)
+        assertEquals(100L, timing.waitAfterSwipeMs)
+        assertEquals(120, timing.maxRefreshesPerMinute)
+        assertEquals(60L, timing.clickDebounceMs)
+        assertEquals(120L, timing.refreshSwipeDurationMs)
+    }
+
+    @Test
+    fun refreshWaitOnlyWakesForAvailableSlotInTargetSchedule() {
+        assertTrue(RefreshWakePolicy.shouldWake(true, true, true, false, true))
+        assertFalse(RefreshWakePolicy.shouldWake(false, true, true, false, true))
+        assertFalse(RefreshWakePolicy.shouldWake(true, false, true, false, true))
+        assertFalse(RefreshWakePolicy.shouldWake(true, true, true, true, true))
+        assertFalse(RefreshWakePolicy.shouldWake(true, true, true, false, false))
+    }
+
+    @Test
+    fun refreshCadenceIncludesSwipeAndDataWaitInsideHalfSecond() {
+        assertEquals(500L, RefreshCadencePolicy.remainingWaitMs(10_000, 0, 500))
+        assertEquals(280L, RefreshCadencePolicy.remainingWaitMs(10_220, 10_000, 500))
+        assertEquals(0L, RefreshCadencePolicy.remainingWaitMs(10_501, 10_000, 500))
     }
 
     @Test
@@ -141,13 +153,16 @@ class CoreUtilityTest {
             policy.isReady(200, loading = true, contentChanged = true, quietForMs = 200, priorityContentVisible = true)
         )
         assertFalse(
-            policy.isReady(100, loading = false, contentChanged = true, quietForMs = 100, priorityContentVisible = true)
+            policy.isReady(20, loading = false, contentChanged = true, quietForMs = 100, priorityContentVisible = true)
         )
         assertTrue(
-            policy.isReady(120, loading = false, contentChanged = true, quietForMs = 80, priorityContentVisible = true)
+            policy.isReady(30, loading = false, contentChanged = true, quietForMs = 20, priorityContentVisible = true)
+        )
+        assertTrue(
+            policy.isReady(30, loading = false, contentChanged = false, quietForMs = 0, priorityContentVisible = true)
         )
         assertFalse(
-            policy.isReady(300, loading = false, contentChanged = true, quietForMs = 40, priorityContentVisible = false)
+            policy.isReady(300, loading = false, contentChanged = true, quietForMs = 10, priorityContentVisible = false)
         )
         assertTrue(
             policy.isReady(300, loading = false, contentChanged = false, quietForMs = 0, priorityContentVisible = false)

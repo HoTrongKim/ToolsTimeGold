@@ -122,7 +122,7 @@ class AutoRegisterAccessibilityService : AccessibilityService() {
         var instance: AutoRegisterAccessibilityService? = null
             private set
 
-        private const val EVENT_DEBOUNCE_MS = 150L
+        private const val EVENT_DEBOUNCE_MS = 30L
         private const val EVENT_TEXT_RETENTION_MS = 15_000L
         private const val MAX_EVENT_TEXT_EVENTS = 24
         private const val MAX_EVENT_TEXT_LENGTH = 500

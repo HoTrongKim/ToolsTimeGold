@@ -1,5 +1,6 @@
 package com.autoregistershift.service
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
 import android.graphics.Color
@@ -24,6 +25,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+@SuppressLint("SetTextI18n")
 class CoordinateCaptureOverlayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var windowManager: WindowManager
@@ -155,6 +157,8 @@ class CoordinateCaptureOverlayService : Service() {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
+        var moved = false
+        handle.isClickable = true
         handle.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -162,14 +166,22 @@ class CoordinateCaptureOverlayService : Service() {
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
+                    moved = false
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    moved = moved || kotlin.math.abs(event.rawX - initialTouchX) > 4f ||
+                        kotlin.math.abs(event.rawY - initialTouchY) > 4f
                     params.x = initialX + (event.rawX - initialTouchX).toInt()
                     params.y = initialY + (event.rawY - initialTouchY).toInt()
                     windowManager.updateViewLayout(panel, params)
                     true
                 }
+                MotionEvent.ACTION_UP -> {
+                    if (!moved) handle.performClick()
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> true
                 else -> false
             }
         }

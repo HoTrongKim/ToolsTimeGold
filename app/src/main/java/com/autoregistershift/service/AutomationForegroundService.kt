@@ -11,6 +11,7 @@ import com.autoregistershift.MainActivity
 import com.autoregistershift.R
 import com.autoregistershift.automation.AutomationController
 import com.autoregistershift.automation.StateSnapshot
+import com.autoregistershift.data.AutomationSessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,8 +39,19 @@ class AutomationForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PAUSE -> AutomationController.pause()
-            ACTION_STOP -> AutomationController.stop()
-            null -> AutomationController.restoreIfNeeded(applicationContext)
+            ACTION_STOP -> {
+                AutomationController.stop()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            null -> {
+                val session = AutomationSessionStore(applicationContext)
+                if (!session.shouldRun) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                AutomationController.restoreIfNeeded(applicationContext)
+            }
         }
         return START_STICKY
     }
